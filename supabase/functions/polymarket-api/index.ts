@@ -483,22 +483,17 @@ serve(async (req) => {
             continue;
           }
 
-          // Filter: mid == 0.5 exactly or too balanced (low-quality)
-          if (mid === 0.5 || Math.abs(mid - 0.5) < 0.005) {
-            skipReasons.badMid++;
-            continue;
-          }
+          // Score penalty for mid=0.5 markets (balanced = lower priority, but don't skip)
+          const isCoinFlip = Math.abs(mid - 0.5) < 0.001;
 
           // Filter: missing sides or spread > 10%
           if (bestBid === 0 || bestAsk === 0 || source === "bid_only" || source === "ask_only") {
             skipReasons.emptyBook++;
             continue;
           }
+          // Wide spread penalty (don't skip, just lower priority)
           const bookSpread = (bestAsk - bestBid) / mid;
-          if (bookSpread > 0.10) {
-            skipReasons.wideSpr++;
-            continue;
-          }
+          const wideSpreadPenalty = bookSpread > 0.10 ? -3000 : bookSpread > 0.05 ? -1000 : 0;
 
           // Filter: sponsor pool minimum
           if (sponsorPool < minSponsorPool) {
@@ -508,8 +503,9 @@ serve(async (req) => {
 
           // ── Category bonus ──
           const { bonus: categoryBonus, category } = getCategoryBonus(question);
+          const coinFlipPenalty = isCoinFlip ? -2000 : 0;
 
-          const score = scoreMarket(volume24h, sponsorPool, liquidityDepth, categoryBonus);
+          const score = scoreMarket(volume24h, sponsorPool, liquidityDepth, categoryBonus + coinFlipPenalty + wideSpreadPenalty);
 
           enriched.push({
             ...m,
@@ -544,7 +540,7 @@ serve(async (req) => {
 
         // Enhanced logging
         logs.push(`📊 Загружено ${allMarkets.length} markets | После фильтров: ${enriched.length} качественных (${sponsoredCount} со спонсорами, ${cryptoCount} crypto/short-term, ${macroCount} macro) | Avg sponsor $${avgSponsor.toFixed(0)}`);
-        logs.push(`🔍 Отфильтровано: vol<${minVolume24h}=${skipReasons.lowVol}, пустой стакан=${skipReasons.emptyBook}, mid≈0.5=${skipReasons.badMid}, спред>10%=${skipReasons.wideSpr}, глубина<${minLiquidityDepth}=${skipReasons.lowDepth}, спонсор<${minSponsorPool}=${skipReasons.lowSponsor}`);
+        logs.push(`🔍 Отфильтровано: vol<${minVolume24h}=${skipReasons.lowVol}, пустой стакан=${skipReasons.emptyBook}, mid≈0.5=${skipReasons.badMid}, спред>30%=${skipReasons.wideSpr}, глубина<${minLiquidityDepth}=${skipReasons.lowDepth}, спонсор<${minSponsorPool}=${skipReasons.lowSponsor}`);
         logs.push(`🎯 Выбрано ${selectedMarkets.length} рынков`);
 
         // Log full market list
