@@ -15,7 +15,7 @@ const sliders = [
   { key: "maxMarkets" as const, label: "📊 Макс. рынков", min: 1, max: 125, step: 1, unit: "" },
   { key: "maxPosition" as const, label: "🛡️ Макс. позиция / рынок", min: 1, max: 100, step: 1, unit: "USDC" },
   { key: "minVolume24h" as const, label: "📈 Мин. 24ч объём", min: 100, max: 50000, step: 100, unit: "USDC" },
-  { key: "minSponsorPool" as const, label: "🏆 Мин. спонсорский пул", min: 0, max: 2000, step: 50, unit: "$" },
+  { key: "minSponsorPool" as const, label: "🏆 Мин. спонсорский пул", min: 0, max: 2000, step: 10, unit: "$" },
   { key: "minLiquidityDepth" as const, label: "💧 Мин. глубина ликвидности", min: 20, max: 2000, step: 10, unit: "$" },
   { key: "totalCapital" as const, label: "💼 Общий капитал", min: 50, max: 10000, step: 10, unit: "USDC" },
 ];
@@ -46,6 +46,11 @@ const ControlPanel = ({ config, onUpdate, disabled }: ControlPanelProps) => {
           {c.key === "totalCapital" && config.totalCapital < 300 && (
             <p className="text-[10px] font-semibold text-destructive leading-tight">
               ⚠️ При капитале ниже $300–500 прибыль будет очень маленькой. Рекомендуется сначала тестить в Paper-режиме.
+            </p>
+          )}
+          {c.key === "minSponsorPool" && config.totalCapital < 300 && (
+            <p className="text-[10px] text-muted-foreground leading-tight">
+              💡 Для маленького капитала рекомендуется 0$ (чтобы бот находил рынки)
             </p>
           )}
         </div>
