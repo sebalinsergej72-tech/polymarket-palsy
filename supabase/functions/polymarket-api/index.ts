@@ -469,7 +469,8 @@ serve(async (req) => {
         const maxMarkets = params.maxMarkets || 12;
         const baseBp = params.spread || 22;
         let orderSize = params.orderSize || 6;
-        let paperTrading = params.paperTrading ?? true;
+        const liveTrading = params.liveTrading ?? false;
+        let paperTrading = !liveTrading;
         const totalCapital = params.totalCapital || 65;
         const maxPosition = Math.min(params.maxPosition || 30, Math.floor(totalCapital * 0.48));
         const minSponsorPool = params.minSponsorPool ?? 0;
@@ -482,21 +483,17 @@ serve(async (req) => {
         orderSize = Math.min(orderSize, Math.floor(totalCapital * 0.08));
         if (orderSize < 1) orderSize = 1;
 
-        // ── Small capital safety ──
-        if (totalCapital < 150) {
-          logs.push("⚠️ КАПИТАЛ МАЛЕНЬКИЙ ($" + totalCapital + ") — бот запущен в PAPER-режиме для безопасности");
-          paperTrading = true;
-        }
+        logs.push(`🔄 РЕЖИМ: ${paperTrading ? '📝 PAPER' : '💰 LIVE TRADING'}`);
 
-        if (!paperTrading) {
-          logs.push("⚠️ ВНИМАНИЕ: реальная торговля с $" + totalCapital + " — возможны редкие филлы и маленькая прибыль");
+        if (!paperTrading && totalCapital < 150) {
+          logs.push("⚠️ ВНИМАНИЕ: LIVE торговля с маленьким капиталом $" + totalCapital + " — возможны редкие филлы и маленькая прибыль");
         }
 
         if (paperTrading) {
           logs.push(`🧪 PAPER MODE: позиции будут ограничиваться maxPosition=${maxPosition} и totalCapital=${totalCapital}`);
         }
 
-        logs.push(`⚙️ РЕЖИМ МАЛЕНЬКОГО КАПИТАЛА: sponsor min=${minSponsorPool}, volume min=${minVolume24h}, depth min=${minLiquidityDepth}, order=${orderSize}, maxPos=${maxPosition}`);
+        logs.push(`⚙️ Параметры: sponsor min=${minSponsorPool}, volume min=${minVolume24h}, depth min=${minLiquidityDepth}, order=${orderSize}, maxPos=${maxPosition}`);
 
         const { error: resetError } = await sb
           .from("bot_positions")

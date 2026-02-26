@@ -92,7 +92,7 @@ export function useBotState() {
         orderSize: config.orderSize,
         spread: config.spread,
         maxMarkets: config.maxMarkets,
-        paperTrading: config.paperTrading,
+        liveTrading: !config.paperTrading,
         maxPosition: config.maxPosition,
         minSponsorPool: config.minSponsorPool,
         minLiquidityDepth: config.minLiquidityDepth,
