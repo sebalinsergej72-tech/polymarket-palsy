@@ -170,10 +170,10 @@ async function getSponsorPool(conditionId: string, tokenId: string, title: strin
   return { pool: 0, method: "none" };
 }
 
-// ─── Category & Quality Bonus (ULTIMATE v6) ───
+// ─── Category & Quality Bonus (ABSOLUTE FINAL v7) ───
 const TIER1_KEYWORDS = [
-  "Leavitt", "Leavitt say", "press briefing",
-  "Elon Musk # tweets", "Elon Musk net worth",
+  "Leavitt", "Leavitt say", "press briefing", "Joe Biden", "Historic", "AI", "Artificial Intelligence",
+  "Elon Musk # tweets", "Elon Musk net worth", "Elon tweets",
   "5 Minute", "5 min Up or Down", "15 min", "this hour", "today temperature", "highest temperature",
   "S&P", "Dow Jones", "SPX", "Bitcoin ETF Flows", "XRP above",
 ];
@@ -193,21 +193,21 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
   let category = "other";
   let isTier1 = false;
 
-  // Tier 1: +28000 — ultimate priority markets
+  // Tier 1: +35000 — absolute priority markets
   for (const kw of TIER1_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
-      bonus += aggressiveShortTerm ? 28000 : 14000;
+      bonus += aggressiveShortTerm ? 35000 : 17500;
       category = "top-tier";
       isTier1 = true;
       break;
     }
   }
 
-  // Tier 2: +15000 — crypto/macro/sports
+  // Tier 2: +18000 — crypto/macro/sports
   if (!isTier1) {
     for (const kw of TIER2_KEYWORDS) {
       if (upper.includes(kw.toUpperCase())) {
-        bonus += aggressiveShortTerm ? 15000 : 7500;
+        bonus += aggressiveShortTerm ? 18000 : 9000;
         if (["BTC","ETH","SOL"].some(k => kw.toUpperCase() === k.toUpperCase())) {
           category = "crypto/short-term";
         } else if (["NBA","NHL","Champions League"].some(k => kw.toUpperCase() === k.toUpperCase())) {
@@ -226,10 +226,10 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
     if (category === "other") category = "sponsored";
   }
 
-  // Negative keywords: -12000
+  // Negative keywords: -15000
   for (const kw of NEGATIVE_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
-      bonus -= 12000;
+      bonus -= 15000;
       category = "long-term";
       break;
     }
@@ -238,10 +238,10 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
   return { bonus, category, isTier1 };
 }
 
-// ─── New scoring formula v6 (ultimate) ───
+// ─── New scoring formula v7 (absolute final) ───
 function scoreMarket(volume24h: number, sponsorPool: number, liquidityDepth: number, categoryBonus: number, isTier1: boolean): number {
-  const base = (volume24h * 0.05) + (sponsorPool * 25) + (liquidityDepth * 0.7) + categoryBonus;
-  return isTier1 ? base * 3.5 : base;
+  const base = (volume24h * 0.03) + (sponsorPool * 30) + (liquidityDepth * 0.8) + categoryBonus;
+  return isTier1 ? base * 4.0 : base;
 }
 
 // ─── Dynamic spread calculation ───
@@ -621,8 +621,8 @@ serve(async (req) => {
         // Enhanced cycle-start logging
         logs.push(`🔍 Загружено ${allMarkets.length} | После фильтров ${enriched.length} | Выбрано ${selectedMarkets.length} (${sponsoredCount} со спонсорами, ${cryptoCount} short-term/crypto, ${macroCount} macro)`);
         const topTierCount = selectedMarkets.filter(m => m.category === "top-tier").length;
-        logs.push(`🔥 Sponsor fetch: ${sponsorClobCount} via CLOB, ${sponsorFallbackCount} via /rewards page (Leavitt/Elon detected)`);
         const tier1InTop10 = selectedMarkets.slice(0, 10).filter(m => m.category === "top-tier").length;
+        logs.push(`🔥 Sponsor fetch: ${sponsorClobCount} via CLOB, ${sponsorFallbackCount} via /rewards (Leavitt/Elon detected!) — Tier 1 markets in top 10: ${tier1InTop10}`);
         logs.push(`🎯 Выбрано ${selectedMarkets.length} (${sponsoredCount} sponsored/daily, ${cryptoCount + topTierCount} short-term/crypto, ${macroCount + sportsCount} macro) — Tier 1 markets in top 10: ${tier1InTop10}!`);
         logs.push(`🔍 Отфильтровано: vol<${minVolume24h}=${skipReasons.lowVol}, пустой стакан=${skipReasons.emptyBook}, глубина<80=${skipReasons.lowDepth}, спонсор<${minSponsorPool}=${skipReasons.lowSponsor}`);
 

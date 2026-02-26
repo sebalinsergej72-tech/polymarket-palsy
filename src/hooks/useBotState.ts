@@ -32,7 +32,7 @@ const DEFAULT_CONFIG: BotConfig = {
   maxPosition: 250,
   minSponsorPool: 0,
   minLiquidityDepth: 80,
-  minVolume24h: 1000,
+  minVolume24h: 800,
   totalCapital: 1000,
   useExternalOracle: false,
   aggressiveShortTerm: true,
