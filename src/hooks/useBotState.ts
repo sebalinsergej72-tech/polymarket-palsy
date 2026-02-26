@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
 export interface LogEntry {
   id: number;
@@ -12,7 +13,6 @@ export interface BotConfig {
   spread: number;
   interval: number;
   maxMarkets: number;
-  apiUrl: string;
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -20,68 +20,113 @@ const DEFAULT_CONFIG: BotConfig = {
   spread: 15,
   interval: 8,
   maxMarkets: 5,
-  apiUrl: "http://localhost:8000",
 };
 
-const MAX_LOGS = 100;
+const MAX_LOGS = 200;
 
 export function useBotState() {
   const [isRunning, setIsRunning] = useState(false);
-  const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
+  const [isConnected, setIsConnected] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const logIdRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const addLog = useCallback((level: LogEntry["level"], message: string) => {
     const entry: LogEntry = {
       id: logIdRef.current++,
-      timestamp: new Date().toLocaleTimeString("ru-RU", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      timestamp: new Date().toLocaleTimeString("ru-RU", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }),
       level,
       message,
     };
     setLogs((prev) => [...prev.slice(-(MAX_LOGS - 1)), entry]);
   }, []);
 
-  const startBot = useCallback(() => {
+  const callApi = useCallback(
+    async (action: string, params: Record<string, unknown> = {}) => {
+      const { data, error } = await supabase.functions.invoke("polymarket-api", {
+        body: { action, ...params },
+      });
+      if (error) throw new Error(error.message);
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    []
+  );
+
+  const connectBot = useCallback(async () => {
+    addLog("info", "🔑 Деривация API credentials из приватного ключа...");
+    try {
+      const data = await callApi("derive_creds");
+      setIsConnected(true);
+      addLog("success", `✅ Подключено! API Key: ${data.address}`);
+    } catch (e: any) {
+      addLog("error", `❌ Ошибка подключения: ${e.message}`);
+    }
+  }, [addLog, callApi]);
+
+  const runCycle = useCallback(async () => {
+    addLog("info", "━━━ Новый цикл ━━━");
+    try {
+      const data = await callApi("run_cycle", {
+        orderSize: config.orderSize,
+        spread: config.spread,
+        maxMarkets: config.maxMarkets,
+      });
+      if (data.logs) {
+        data.logs.forEach((msg: string) => {
+          const level = msg.includes("❌")
+            ? "error"
+            : msg.includes("⚠️")
+            ? "warn"
+            : msg.includes("✅")
+            ? "success"
+            : "info";
+          addLog(level, msg);
+        });
+      }
+    } catch (e: any) {
+      addLog("error", `❌ Ошибка цикла: ${e.message}`);
+    }
+  }, [addLog, callApi, config]);
+
+  const startBot = useCallback(async () => {
     setIsRunning(true);
-    addLog("success", "🚀 Бот запущен! Подключение к API...");
+    addLog("success", "🚀 Бот запущен! Подключение к Polymarket CLOB...");
     addLog("info", `⚙️ Конфигурация: ордер=${config.orderSize} USDC, спред=${config.spread}bp, интервал=${config.interval}с, рынков=${config.maxMarkets}`);
 
-    // Simulate bot cycles (replace with real API calls)
-    const markets = ["US Election 2026", "Bitcoin > $150k", "ETH Merge v2", "Fed Rate Cut", "AI Regulation Bill"];
-    let cycle = 0;
+    if (!isConnected) {
+      await connectBot();
+    }
 
+    // Run first cycle immediately
+    await runCycle();
+
+    // Schedule subsequent cycles
     intervalRef.current = setInterval(() => {
-      cycle++;
-      addLog("info", `━━━ Цикл #${cycle} ━━━`);
-      addLog("info", "🗑️ Отмена всех открытых ордеров...");
-      addLog("success", "✅ Все ордера отменены");
-      addLog("info", `📊 Загрузка топ-${config.maxMarkets} рынков с Gamma API...`);
-
-      const selected = markets.slice(0, config.maxMarkets);
-      selected.forEach((market) => {
-        const mid = (0.3 + Math.random() * 0.4).toFixed(4);
-        const buy = (parseFloat(mid) - config.spread / 20000).toFixed(4);
-        const sell = (parseFloat(mid) + config.spread / 20000).toFixed(4);
-        addLog("info", `📈 ${market}: mid=${mid}`);
-        addLog("success", `  ✅ BUY YES @ ${buy} (${config.orderSize} USDC)`);
-        addLog("success", `  ✅ SELL YES @ ${sell} (${config.orderSize} USDC)`);
-      });
-
-      addLog("info", `⏳ Ожидание ${config.interval}с до следующего цикла...`);
+      runCycle();
     }, config.interval * 1000);
-  }, [config, addLog]);
+  }, [config, isConnected, connectBot, runCycle, addLog]);
 
-  const stopBot = useCallback(() => {
+  const stopBot = useCallback(async () => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
     addLog("warn", "⏹ Остановка бота...");
-    addLog("info", "🗑️ Отмена всех открытых ордеров...");
-    addLog("success", "✅ Все ордера отменены. Бот остановлен.");
+    try {
+      await callApi("cancel_all");
+      addLog("success", "✅ Все ордера отменены. Бот остановлен.");
+    } catch (e: any) {
+      addLog("error", `⚠️ Ошибка отмены ордеров: ${e.message}`);
+    }
     setIsRunning(false);
-  }, [addLog]);
+  }, [addLog, callApi]);
 
   const clearLogs = useCallback(() => setLogs([]), []);
 
@@ -95,5 +140,5 @@ export function useBotState() {
     };
   }, []);
 
-  return { isRunning, config, logs, startBot, stopBot, clearLogs, updateConfig };
+  return { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot };
 }
