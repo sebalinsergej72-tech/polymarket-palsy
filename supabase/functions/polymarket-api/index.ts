@@ -170,42 +170,45 @@ async function getSponsorPool(conditionId: string, tokenId: string, title: strin
   return { pool: 0, method: "none" };
 }
 
-// ─── Category & Quality Bonus (FINAL v5) ───
+// ─── Category & Quality Bonus (ULTIMATE v6) ───
 const TIER1_KEYWORDS = [
-  "Leavitt say", "Elon Musk net worth", "temperature", "S&P", "Dow Jones",
-  "Bitcoin ETF Flows", "XRP above", "Up or Down on February",
+  "Leavitt", "Leavitt say", "press briefing",
+  "Elon Musk # tweets", "Elon Musk net worth",
+  "5 Minute", "5 min Up or Down", "15 min", "this hour", "today temperature", "highest temperature",
+  "S&P", "Dow Jones", "SPX", "Bitcoin ETF Flows", "XRP above",
 ];
 
 const TIER2_KEYWORDS = [
-  "BTC", "ETH", "SOL", "5 min", "15 min", "Up or Down", "this hour", "today",
-  "Fed", "NBA", "NHL", "Champions League",
+  "BTC", "ETH", "SOL", "Fed", "interest rates", "NBA", "NHL", "Champions League",
 ];
 
 const NEGATIVE_KEYWORDS = [
   "2028", "2029", "Democratic presidential", "Republican presidential",
-  "Jesus Christ return", "Uzbekistan win", "before 2027",
+  "Jesus Christ return", "Uzbekistan",
 ];
 
-function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTerm: boolean): { bonus: number; category: string } {
+function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTerm: boolean): { bonus: number; category: string; isTier1: boolean } {
   const upper = title.toUpperCase();
   let bonus = 0;
   let category = "other";
+  let isTier1 = false;
 
-  // Tier 1: +20000 — highest value markets
+  // Tier 1: +28000 — ultimate priority markets
   for (const kw of TIER1_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
-      bonus += aggressiveShortTerm ? 20000 : 10000;
+      bonus += aggressiveShortTerm ? 28000 : 14000;
       category = "top-tier";
+      isTier1 = true;
       break;
     }
   }
 
-  // Tier 2: +12000 — crypto/short-term/macro/sports
-  if (bonus === 0) {
+  // Tier 2: +15000 — crypto/macro/sports
+  if (!isTier1) {
     for (const kw of TIER2_KEYWORDS) {
       if (upper.includes(kw.toUpperCase())) {
-        bonus += aggressiveShortTerm ? 12000 : 6000;
-        if (["BTC","ETH","SOL","5 min","15 min","Up or Down","this hour","today"].some(k => kw.toUpperCase() === k.toUpperCase())) {
+        bonus += aggressiveShortTerm ? 15000 : 7500;
+        if (["BTC","ETH","SOL"].some(k => kw.toUpperCase() === k.toUpperCase())) {
           category = "crypto/short-term";
         } else if (["NBA","NHL","Champions League"].some(k => kw.toUpperCase() === k.toUpperCase())) {
           category = "sports";
@@ -223,21 +226,22 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
     if (category === "other") category = "sponsored";
   }
 
-  // Negative keywords: -8000
+  // Negative keywords: -12000
   for (const kw of NEGATIVE_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
-      bonus -= 8000;
+      bonus -= 12000;
       category = "long-term";
       break;
     }
   }
 
-  return { bonus, category };
+  return { bonus, category, isTier1 };
 }
 
-// ─── New scoring formula v5 ───
-function scoreMarket(volume24h: number, sponsorPool: number, liquidityDepth: number, categoryBonus: number): number {
-  return (volume24h * 0.15) + (sponsorPool * 15) + (liquidityDepth * 0.4) + categoryBonus;
+// ─── New scoring formula v6 (ultimate) ───
+function scoreMarket(volume24h: number, sponsorPool: number, liquidityDepth: number, categoryBonus: number, isTier1: boolean): number {
+  const base = (volume24h * 0.05) + (sponsorPool * 25) + (liquidityDepth * 0.7) + categoryBonus;
+  return isTier1 ? base * 3.5 : base;
 }
 
 // ─── Dynamic spread calculation ───
@@ -456,8 +460,8 @@ serve(async (req) => {
         const paperTrading = params.paperTrading ?? true;
         const maxPosition = params.maxPosition || 250;
         const minSponsorPool = params.minSponsorPool ?? 0;
-        const minLiquidityDepth = params.minLiquidityDepth || 150;
-        const minVolume24h = params.minVolume24h || 2000;
+        const minLiquidityDepth = params.minLiquidityDepth || 80;
+        const minVolume24h = params.minVolume24h || 1000;
         const totalCapital = params.totalCapital || 1000;
         const useExternalOracle = params.useExternalOracle || false;
         const aggressiveShortTerm = params.aggressiveShortTerm ?? true;
@@ -575,10 +579,10 @@ serve(async (req) => {
 
           const depthPenalty = liquidityDepth < minLiquidityDepth ? -1500 : 0;
 
-          // ── Category bonus (v4 radical) ──
-          const { bonus: categoryBonus, category } = getCategoryBonus(question, sponsorPool, aggressiveShortTerm);
+          // ── Category bonus (v6 ultimate) ──
+          const { bonus: categoryBonus, category, isTier1 } = getCategoryBonus(question, sponsorPool, aggressiveShortTerm);
 
-          const score = scoreMarket(volume24h, sponsorPool, liquidityDepth, categoryBonus + coinFlipPenalty + wideSpreadPenalty + depthPenalty);
+          const score = scoreMarket(volume24h, sponsorPool, liquidityDepth, categoryBonus + coinFlipPenalty + wideSpreadPenalty + depthPenalty, isTier1);
 
           enriched.push({
             ...m,
@@ -618,7 +622,8 @@ serve(async (req) => {
         logs.push(`🔍 Загружено ${allMarkets.length} | После фильтров ${enriched.length} | Выбрано ${selectedMarkets.length} (${sponsoredCount} со спонсорами, ${cryptoCount} short-term/crypto, ${macroCount} macro)`);
         const topTierCount = selectedMarkets.filter(m => m.category === "top-tier").length;
         logs.push(`🔥 Sponsor fetch: ${sponsorClobCount} via CLOB, ${sponsorFallbackCount} via /rewards page (Leavitt/Elon detected)`);
-        logs.push(`🎯 Выбрано ${selectedMarkets.length} (${sponsoredCount} sponsored, ${cryptoCount + topTierCount} daily short-term, ${macroCount + sportsCount} macro/sports)`);
+        const tier1InTop10 = selectedMarkets.slice(0, 10).filter(m => m.category === "top-tier").length;
+        logs.push(`🎯 Выбрано ${selectedMarkets.length} (${sponsoredCount} sponsored/daily, ${cryptoCount + topTierCount} short-term/crypto, ${macroCount + sportsCount} macro) — Tier 1 markets in top 10: ${tier1InTop10}!`);
         logs.push(`🔍 Отфильтровано: vol<${minVolume24h}=${skipReasons.lowVol}, пустой стакан=${skipReasons.emptyBook}, глубина<80=${skipReasons.lowDepth}, спонсор<${minSponsorPool}=${skipReasons.lowSponsor}`);
 
         // Log top markets
