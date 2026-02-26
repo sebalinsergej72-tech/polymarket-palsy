@@ -40,22 +40,15 @@ async function getTradingClient() {
 
 // ─── Gamma API: Fetch top active markets by 24h volume ───
 async function getMarkets(limit: number) {
-  const url = `${GAMMA_API}/events?active=true&closed=false&order=volume_24hr&ascending=false&limit=${Math.min(limit, 100)}`;
+  const url = `${GAMMA_API}/markets?limit=${Math.min(limit, 100)}&active=true&closed=false&order=volume24hr&ascending=false`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Gamma API error: ${res.status}`);
-  const events = await res.json();
-  // Flatten events → markets
-  const markets: any[] = [];
-  for (const event of events) {
-    if (event.markets && Array.isArray(event.markets)) {
-      for (const m of event.markets) {
-        markets.push({ ...m, eventSlug: event.slug });
-      }
-    } else {
-      markets.push(event);
-    }
+  if (!res.ok) {
+    // Fallback to simpler query
+    const res2 = await fetch(`${GAMMA_API}/markets?limit=${Math.min(limit, 100)}&active=true&closed=false`);
+    if (!res2.ok) throw new Error(`Gamma API error: ${res2.status}`);
+    return await res2.json();
   }
-  return markets;
+  return await res.json();
 }
 
 // ─── Mid-price with orderbook depth ───
@@ -397,11 +390,17 @@ serve(async (req) => {
           );
         }
 
-        // ── 2. Enrich each market with sponsor pool & orderbook depth ──
+        // ── 2. Enrich top markets with orderbook depth (limit to maxMarkets*2 to avoid timeout) ──
+        const marketsToEnrich = allMarkets.slice(0, Math.min(maxMarkets * 2, 60));
         const enriched: any[] = [];
-        for (const m of allMarkets) {
-          if (!m.clobTokenIds || m.clobTokenIds.length === 0) continue;
-          const tokenId = m.clobTokenIds[0];
+        for (const m of marketsToEnrich) {
+          // Parse clobTokenIds — may be JSON string or array
+          let tokenIds = m.clobTokenIds;
+          if (typeof tokenIds === "string") {
+            try { tokenIds = JSON.parse(tokenIds); } catch { continue; }
+          }
+          if (!tokenIds || !Array.isArray(tokenIds) || tokenIds.length === 0) continue;
+          const tokenId = tokenIds[0];
 
           // Get sponsor pool
           const conditionId = m.conditionId || m.id || "";
