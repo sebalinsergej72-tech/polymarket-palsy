@@ -457,15 +457,15 @@ serve(async (req) => {
         const sb = getSupabase();
         const logs: string[] = [];
 
-        const maxMarkets = params.maxMarkets || 8;
-        const baseBp = params.spread || 18;
-        let orderSize = params.orderSize || 5;
+        const maxMarkets = params.maxMarkets || 12;
+        const baseBp = params.spread || 22;
+        let orderSize = params.orderSize || 6;
         let paperTrading = params.paperTrading ?? true;
-        const maxPosition = Math.min(params.maxPosition || 32, Math.floor(totalCapital * 0.48));
-        const minSponsorPool = params.minSponsorPool ?? 250;
-        const minLiquidityDepth = params.minLiquidityDepth || 120;
-        const minVolume24h = params.minVolume24h || 4000;
         const totalCapital = params.totalCapital || 65;
+        const maxPosition = Math.min(params.maxPosition || 30, Math.floor(totalCapital * 0.48));
+        const minSponsorPool = params.minSponsorPool ?? 0;
+        const minLiquidityDepth = params.minLiquidityDepth || 80;
+        const minVolume24h = params.minVolume24h || 1500;
         const useExternalOracle = params.useExternalOracle || false;
         const aggressiveShortTerm = params.aggressiveShortTerm ?? true;
 
@@ -482,6 +482,8 @@ serve(async (req) => {
         if (!paperTrading) {
           logs.push("⚠️ ВНИМАНИЕ: реальная торговля с $" + totalCapital + " — возможны редкие филлы и маленькая прибыль");
         }
+
+        logs.push(`⚙️ РЕЖИМ МАЛЕНЬКОГО КАПИТАЛА: sponsor min=${minSponsorPool}, volume min=${minVolume24h}, depth min=${minLiquidityDepth}, order=${orderSize}, maxPos=${maxPosition}`);
 
         const orders: any[] = [];
 

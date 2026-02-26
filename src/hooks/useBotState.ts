@@ -24,15 +24,15 @@ export interface BotConfig {
 }
 
 const DEFAULT_CONFIG: BotConfig = {
-  orderSize: 5,
-  spread: 18,
+  orderSize: 6,
+  spread: 22,
   interval: 6,
-  maxMarkets: 8,
+  maxMarkets: 12,
   paperTrading: true,
-  maxPosition: 32,
-  minSponsorPool: 250,
-  minLiquidityDepth: 120,
-  minVolume24h: 4000,
+  maxPosition: 30,
+  minSponsorPool: 0,
+  minLiquidityDepth: 80,
+  minVolume24h: 1500,
   totalCapital: 65,
   useExternalOracle: false,
   aggressiveShortTerm: true,
