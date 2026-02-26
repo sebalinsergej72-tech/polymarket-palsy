@@ -420,6 +420,15 @@ serve(async (req) => {
         );
       }
 
+      case "reset_positions": {
+        const sb = getSupabase();
+        await sb.from("bot_positions").delete().neq("market_id", "dummy");
+        return new Response(
+          JSON.stringify({ ok: true, message: "🗑️ Все позиции сброшены до 0" }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       case "cancel_all": {
         const client = await getTradingClient();
         const result = await client.cancelAll();
@@ -488,6 +497,12 @@ serve(async (req) => {
         }
 
         logs.push(`⚙️ РЕЖИМ МАЛЕНЬКОГО КАПИТАЛА: sponsor min=${minSponsorPool}, volume min=${minVolume24h}, depth min=${minLiquidityDepth}, order=${orderSize}, maxPos=${maxPosition}`);
+
+        const { error: resetError } = await sb
+          .from("bot_positions")
+          .update({ net_position: 0 })
+          .gt("net_position", maxPosition * 1.5);
+        if (!resetError) logs.push(`🔄 Авто-сброс старых огромных позиций (>${maxPosition * 1.5} USDC)`);
 
         const orders: any[] = [];
 

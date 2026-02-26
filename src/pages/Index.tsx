@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 
 const Index = () => {
-  const { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker, sponsorStats } = useBotState();
+  const { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker, sponsorStats, resetPositions } = useBotState();
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
@@ -81,7 +81,7 @@ const Index = () => {
 
             <StatsPanel isConnected={isConnected} isRunning={isRunning} circuitBreaker={circuitBreaker} sponsorStats={sponsorStats} />
 
-            <ActionButtons isRunning={isRunning} onStart={startBot} onStop={stopBot} />
+            <ActionButtons isRunning={isRunning} onStart={startBot} onStop={stopBot} onReset={resetPositions} />
 
             <LogPanel logs={logs} onClear={clearLogs} />
           </main>

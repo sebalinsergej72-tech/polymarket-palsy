@@ -176,11 +176,21 @@ export function useBotState() {
     setConfig((prev) => ({ ...prev, ...partial }));
   }, []);
 
+  const resetPositions = useCallback(async () => {
+    addLog("info", "🗑️ Сброс всех позиций...");
+    try {
+      const data = await callApi("reset_positions");
+      addLog("success", data.message || "✅ Позиции сброшены");
+    } catch (e: any) {
+      addLog("error", `❌ Ошибка сброса: ${e.message}`);
+    }
+  }, [addLog, callApi]);
+
   useEffect(() => {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, []);
 
-  return { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker, sponsorStats };
+  return { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker, sponsorStats, resetPositions };
 }
