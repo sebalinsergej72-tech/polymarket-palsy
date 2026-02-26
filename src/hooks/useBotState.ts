@@ -13,6 +13,7 @@ export interface BotConfig {
   spread: number;
   interval: number;
   maxMarkets: number;
+  paperTrading: boolean;
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -20,6 +21,7 @@ const DEFAULT_CONFIG: BotConfig = {
   spread: 15,
   interval: 8,
   maxMarkets: 5,
+  paperTrading: true,
 };
 
 const MAX_LOGS = 200;
@@ -77,6 +79,7 @@ export function useBotState() {
         orderSize: config.orderSize,
         spread: config.spread,
         maxMarkets: config.maxMarkets,
+        paperTrading: config.paperTrading,
       });
       if (data.logs) {
         data.logs.forEach((msg: string) => {

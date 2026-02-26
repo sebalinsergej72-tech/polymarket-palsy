@@ -96,13 +96,17 @@ serve(async (req) => {
         const client = await getTradingClient();
         const logs: string[] = [];
 
-        // 1. Cancel existing orders
-        logs.push("🗑️ Отмена всех открытых ордеров...");
-        try {
-          await client.cancelAll();
-          logs.push("✅ Все ордера отменены");
-        } catch (e) {
-          logs.push(`⚠️ Ошибка отмены: ${e.message}`);
+        // 1. Cancel existing orders (skip in paper mode)
+        if (!paperTrading) {
+          logs.push("🗑️ Отмена всех открытых ордеров...");
+          try {
+            await client.cancelAll();
+            logs.push("✅ Все ордера отменены");
+          } catch (e) {
+            logs.push(`⚠️ Ошибка отмены: ${e.message}`);
+          }
+        } else {
+          logs.push("📝 [PAPER] Пропуск отмены ордеров (симуляция)");
         }
 
         // 2. Fetch top markets
@@ -112,6 +116,7 @@ serve(async (req) => {
 
         const spread = params.spread || 15;
         const orderSize = params.orderSize || 50;
+        const paperTrading = params.paperTrading ?? true;
         const orders: any[] = [];
 
         // 3. Place orders on each market
@@ -144,32 +149,40 @@ serve(async (req) => {
           const marketName = (market.question || "Unknown").slice(0, 50);
           logs.push(`📈 ${marketName}: mid=${midPrice.toFixed(4)}`);
 
-          try {
-            const buyOrder = await client.createAndPostOrder(
-              { tokenID: tokenId, price: parseFloat(buyPrice.toFixed(2)), size: orderSize, side: "BUY" },
-              { tickSize: "0.01", negRisk },
-              "GTC"
-            );
-            logs.push(`  ✅ BUY @ ${buyPrice.toFixed(4)} (${orderSize} USDC)`);
-            orders.push(buyOrder);
-          } catch (e) {
-            logs.push(`  ❌ BUY failed: ${e.message}`);
-          }
+          if (paperTrading) {
+            logs.push(`  📝 [PAPER] BUY @ ${buyPrice.toFixed(4)} (${orderSize} USDC)`);
+            logs.push(`  📝 [PAPER] SELL @ ${sellPrice.toFixed(4)} (${orderSize} USDC)`);
+            orders.push({ paper: true });
+            orders.push({ paper: true });
+          } else {
+            try {
+              const buyOrder = await client.createAndPostOrder(
+                { tokenID: tokenId, price: parseFloat(buyPrice.toFixed(2)), size: orderSize, side: "BUY" },
+                { tickSize: "0.01", negRisk },
+                "GTC"
+              );
+              logs.push(`  ✅ BUY @ ${buyPrice.toFixed(4)} (${orderSize} USDC)`);
+              orders.push(buyOrder);
+            } catch (e) {
+              logs.push(`  ❌ BUY failed: ${e.message}`);
+            }
 
-          try {
-            const sellOrder = await client.createAndPostOrder(
-              { tokenID: tokenId, price: parseFloat(sellPrice.toFixed(2)), size: orderSize, side: "SELL" },
-              { tickSize: "0.01", negRisk },
-              "GTC"
-            );
-            logs.push(`  ✅ SELL @ ${sellPrice.toFixed(4)} (${orderSize} USDC)`);
-            orders.push(sellOrder);
-          } catch (e) {
-            logs.push(`  ❌ SELL failed: ${e.message}`);
+            try {
+              const sellOrder = await client.createAndPostOrder(
+                { tokenID: tokenId, price: parseFloat(sellPrice.toFixed(2)), size: orderSize, side: "SELL" },
+                { tickSize: "0.01", negRisk },
+                "GTC"
+              );
+              logs.push(`  ✅ SELL @ ${sellPrice.toFixed(4)} (${orderSize} USDC)`);
+              orders.push(sellOrder);
+            } catch (e) {
+              logs.push(`  ❌ SELL failed: ${e.message}`);
+            }
           }
         }
 
-        logs.push(`📋 Итого: ${orders.length} ордеров размещено`);
+        const modeLabel = paperTrading ? "📝 PAPER" : "💰 LIVE";
+        logs.push(`${modeLabel} Итого: ${orders.length} ордеров ${paperTrading ? "симулировано" : "размещено"}`);
 
         return new Response(
           JSON.stringify({ ok: true, logs, ordersPlaced: orders.length }),
