@@ -3,10 +3,11 @@ import StatusIndicator from "@/components/bot/StatusIndicator";
 import ControlPanel from "@/components/bot/ControlPanel";
 import ActionButtons from "@/components/bot/ActionButtons";
 import LogPanel from "@/components/bot/LogPanel";
-import { Activity, Zap } from "lucide-react";
+import { Activity, Zap, Wifi } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const Index = () => {
-  const { isRunning, config, logs, startBot, stopBot, clearLogs, updateConfig } = useBotState();
+  const { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot } = useBotState();
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
@@ -17,7 +18,7 @@ const Index = () => {
             🚀 Polymarket Market-Making Bot
           </h1>
           <p className="font-mono text-sm text-muted-foreground">
-            Самая стабильная стратегия 2026 • Только Polymarket API • Работает 24/7 в облаке
+            Реальная торговля на Polymarket CLOB • L2 Auth • Работает 24/7 в облаке
           </p>
         </header>
 
@@ -31,22 +32,20 @@ const Index = () => {
 
             <ControlPanel config={config} onUpdate={updateConfig} disabled={isRunning} />
 
-            {/* API URL input */}
-            <div className="space-y-2">
-              <label className="text-sm text-secondary-foreground">🌐 API URL бота</label>
-              <input
-                type="text"
-                value={config.apiUrl}
-                onChange={(e) => updateConfig({ apiUrl: e.target.value })}
-                disabled={isRunning}
-                className="w-full rounded-md border border-border bg-muted px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50"
-                placeholder="http://localhost:8000"
-              />
-            </div>
+            {/* Connection status */}
+            <Button
+              variant={isConnected ? "outline" : "secondary"}
+              className="w-full gap-2"
+              onClick={connectBot}
+              disabled={isConnected || isRunning}
+            >
+              <Wifi className="h-4 w-4" />
+              {isConnected ? "✅ Подключено к CLOB" : "🔑 Подключить кошелёк"}
+            </Button>
 
             <div className="rounded-md border border-border bg-muted/50 p-3">
               <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                ℹ️ Подключите этот дашборд к вашему Python-боту через REST API. Бот выполняет ордера через py-clob-client.
+                ℹ️ Бот использует ваш приватный ключ для деривации L2 API credentials и торговли через Polymarket CLOB API.
               </p>
             </div>
           </aside>
@@ -68,7 +67,7 @@ const Index = () => {
         </div>
 
         <footer className="text-center font-mono text-xs text-muted-foreground">
-          Polymarket MM Bot Dashboard © 2026 • React + Tailwind • Designed for 24/7 cloud deployment
+          Polymarket MM Bot Dashboard © 2026 • React + Lovable Cloud • Live CLOB Trading
         </footer>
       </div>
     </div>
