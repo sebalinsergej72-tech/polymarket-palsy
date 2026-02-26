@@ -66,6 +66,39 @@ serve(async (req) => {
         );
       }
 
+      case "get_stats": {
+        const client = await getTradingClient();
+        const stats: Record<string, unknown> = {
+          balance: 0,
+          openPositions: 0,
+          totalValue: 0,
+          openOrders: 0,
+          pnl: 0,
+        };
+
+        try {
+          // Get open orders
+          const orders = await client.getOpenOrders();
+          stats.openOrders = orders?.length || 0;
+
+          // Calculate total value locked in open orders
+          let ordersValue = 0;
+          if (orders && orders.length > 0) {
+            for (const order of orders) {
+              ordersValue += parseFloat(order.original_size || order.size || "0") * parseFloat(order.price || "0");
+            }
+          }
+          stats.totalValue = parseFloat(ordersValue.toFixed(2));
+        } catch (e) {
+          console.error("Error fetching stats:", e.message);
+        }
+
+        return new Response(
+          JSON.stringify({ ok: true, stats }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
       case "cancel_all": {
         const client = await getTradingClient();
         const result = await client.cancelAll();
