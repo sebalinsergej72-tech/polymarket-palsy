@@ -483,6 +483,10 @@ serve(async (req) => {
           logs.push("⚠️ ВНИМАНИЕ: реальная торговля с $" + totalCapital + " — возможны редкие филлы и маленькая прибыль");
         }
 
+        if (paperTrading) {
+          logs.push(`🧪 PAPER MODE: позиции будут ограничиваться maxPosition=${maxPosition} и totalCapital=${totalCapital}`);
+        }
+
         logs.push(`⚙️ РЕЖИМ МАЛЕНЬКОГО КАПИТАЛА: sponsor min=${minSponsorPool}, volume min=${minVolume24h}, depth min=${minLiquidityDepth}, order=${orderSize}, maxPos=${maxPosition}`);
 
         const orders: any[] = [];
@@ -738,14 +742,20 @@ serve(async (req) => {
           }
 
           if (paperTrading) {
-            // ── Paper mode ──
+            // ── Paper mode with position limits ──
             if (!skew.pauseBuy) {
               logs.push(`  📝 [PAPER] BUY @ ${skew.buyPrice.toFixed(4)} (${skew.buySize} USDC)`);
               if (Math.random() < (dynamicBp <= 12 ? 0.65 : 0.40)) {
-                const fillSize = Math.round(skew.buySize * (0.3 + Math.random() * 0.7));
-                await updateNetPosition(sb, marketId, marketName, tokenId, fillSize);
-                await upsertDailyPnl(sb, spreadDecimal * fillSize * 0.5, totalCapital, 1, false);
-                logs.push(`  ✅ [PAPER] Fill BUY: ${fillSize} USDC`);
+                const safeFillSize = Math.min(skew.buySize, maxPosition - Math.abs(netPos));
+                const actualFill = Math.max(0, Math.round(safeFillSize * (0.3 + Math.random() * 0.7)));
+                const newPos = netPos + actualFill;
+                if (actualFill <= 0 || Math.abs(newPos) > maxPosition) {
+                  logs.push(`  ⛔ [PAPER] Skip fill BUY — would exceed maxPosition (${Math.abs(newPos).toFixed(0)} > ${maxPosition})`);
+                } else {
+                  await updateNetPosition(sb, marketId, marketName, tokenId, actualFill);
+                  await upsertDailyPnl(sb, spreadDecimal * actualFill * 0.5, totalCapital, 1, false);
+                  logs.push(`  ✅ [PAPER] Fill BUY: ${actualFill} USDC (pos: ${newPos.toFixed(0)}/${maxPosition})`);
+                }
               }
               orders.push({ paper: true });
             } else {
@@ -754,10 +764,16 @@ serve(async (req) => {
             if (!skew.pauseSell) {
               logs.push(`  📝 [PAPER] SELL @ ${skew.sellPrice.toFixed(4)} (${skew.sellSize} USDC)`);
               if (Math.random() < (dynamicBp <= 12 ? 0.65 : 0.40)) {
-                const fillSize = Math.round(skew.sellSize * (0.3 + Math.random() * 0.7));
-                await updateNetPosition(sb, marketId, marketName, tokenId, -fillSize);
-                await upsertDailyPnl(sb, spreadDecimal * fillSize * 0.5, totalCapital, 1, false);
-                logs.push(`  ✅ [PAPER] Fill SELL: ${fillSize} USDC`);
+                const safeFillSize = Math.min(skew.sellSize, maxPosition - Math.abs(netPos));
+                const actualFill = Math.max(0, Math.round(safeFillSize * (0.3 + Math.random() * 0.7)));
+                const newPos = netPos - actualFill;
+                if (actualFill <= 0 || Math.abs(newPos) > maxPosition) {
+                  logs.push(`  ⛔ [PAPER] Skip fill SELL — would exceed maxPosition (${Math.abs(newPos).toFixed(0)} > ${maxPosition})`);
+                } else {
+                  await updateNetPosition(sb, marketId, marketName, tokenId, -actualFill);
+                  await upsertDailyPnl(sb, spreadDecimal * actualFill * 0.5, totalCapital, 1, false);
+                  logs.push(`  ✅ [PAPER] Fill SELL: ${actualFill} USDC (pos: ${newPos.toFixed(0)}/${maxPosition})`);
+                }
               }
               orders.push({ paper: true });
             } else {
