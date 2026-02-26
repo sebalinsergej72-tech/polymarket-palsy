@@ -239,8 +239,11 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
 }
 
 // ─── New scoring formula v7 (absolute final) ───
+// Cap volume and depth contributions so category bonuses actually dominate
 function scoreMarket(volume24h: number, sponsorPool: number, liquidityDepth: number, categoryBonus: number, isTier1: boolean): number {
-  const base = (volume24h * 0.03) + (sponsorPool * 30) + (liquidityDepth * 0.8) + categoryBonus;
+  const cappedVol = Math.min(volume24h, 500000); // cap at 500K so max vol contrib = 15K
+  const cappedDepth = Math.min(liquidityDepth, 50000); // cap at 50K so max depth contrib = 40K
+  const base = (cappedVol * 0.03) + (sponsorPool * 30) + (cappedDepth * 0.8) + categoryBonus;
   return isTier1 ? base * 4.0 : base;
 }
 
