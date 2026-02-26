@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { DollarSign, TrendingUp, ShoppingCart, Shield, AlertTriangle, BarChart3 } from "lucide-react";
+import { DollarSign, TrendingUp, ShoppingCart, Shield, AlertTriangle, BarChart3, Award } from "lucide-react";
 
 interface Stats {
   balance: number;
@@ -22,9 +22,10 @@ interface StatsPanelProps {
   isConnected: boolean;
   isRunning: boolean;
   circuitBreaker: boolean;
+  sponsorStats?: { sponsored: number; total: number; avgSponsor: number };
 }
 
-const StatsPanel = ({ isConnected, isRunning, circuitBreaker }: StatsPanelProps) => {
+const StatsPanel = ({ isConnected, isRunning, circuitBreaker, sponsorStats }: StatsPanelProps) => {
   const [stats, setStats] = useState<Stats>(EMPTY);
   const [loading, setLoading] = useState(false);
 
@@ -120,6 +121,19 @@ const StatsPanel = ({ isConnected, isRunning, circuitBreaker }: StatsPanelProps)
           </div>
         ))}
       </div>
+
+      {/* Sponsor stats row */}
+      {sponsorStats && sponsorStats.total > 0 && (
+        <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-2.5">
+          <Award className="h-4 w-4 text-primary" />
+          <span className="font-mono text-xs text-muted-foreground">
+            Рынки со спонсорами: <span className="font-semibold text-primary">{sponsorStats.sponsored}</span> / {sponsorStats.total}
+          </span>
+          <span className="font-mono text-xs text-muted-foreground">
+            Avg sponsor: <span className="font-semibold text-foreground">${sponsorStats.avgSponsor.toFixed(0)}</span>
+          </span>
+        </div>
+      )}
 
       {/* Active positions */}
       {activePositions.length > 0 && (

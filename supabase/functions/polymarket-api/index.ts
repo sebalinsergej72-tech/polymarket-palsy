@@ -38,17 +38,36 @@ async function getTradingClient() {
   return cachedClient;
 }
 
-// ─── Gamma API: Fetch markets with rewards data ───
+// ─── Gamma API: Fetch top active markets by 24h volume ───
 async function getMarkets(limit: number) {
-  const res = await fetch(
-    `${GAMMA_API}/markets?limit=${Math.min(limit * 3, 100)}&active=true&closed=false&order=volume24hr&ascending=false`
-  );
+  const url = `${GAMMA_API}/events?active=true&closed=false&order=volume_24hr&ascending=false&limit=${Math.min(limit, 100)}`;
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`Gamma API error: ${res.status}`);
-  return await res.json();
+  const events = await res.json();
+  // Flatten events → markets
+  const markets: any[] = [];
+  for (const event of events) {
+    if (event.markets && Array.isArray(event.markets)) {
+      for (const m of event.markets) {
+        markets.push({ ...m, eventSlug: event.slug });
+      }
+    } else {
+      markets.push(event);
+    }
+  }
+  return markets;
 }
 
-// ─── Mid-price with fallback chain ───
-async function getMidPrice(client: any, tokenId: string): Promise<{ mid: number; source: string; range1h: number }> {
+// ─── Mid-price with orderbook depth ───
+interface MidResult {
+  mid: number;
+  source: string;
+  range1h: number;
+  bidDepth: number;
+  askDepth: number;
+}
+
+async function getMidPrice(client: any, tokenId: string): Promise<MidResult> {
   try {
     const book = await client.getOrderBook(tokenId);
     const hasBids = book?.bids?.length > 0;
@@ -57,26 +76,33 @@ async function getMidPrice(client: any, tokenId: string): Promise<{ mid: number;
     if (hasBids && hasAsks) {
       const bestBid = parseFloat(book.bids[0].price);
       const bestAsk = parseFloat(book.asks[0].price);
-      // Calculate 1h price range approximation from spread
+      const bestBidSize = parseFloat(book.bids[0].size || "0");
+      const bestAskSize = parseFloat(book.asks[0].size || "0");
       const range1h = (bestAsk - bestBid) / ((bestBid + bestAsk) / 2) * 100;
-      return { mid: (bestBid + bestAsk) / 2, source: "orderbook", range1h };
+      return { mid: (bestBid + bestAsk) / 2, source: "orderbook", range1h, bidDepth: bestBidSize, askDepth: bestAskSize };
     }
 
     // Fallback: use last trade price if available
     if (book?.market?.lastTradePrice) {
-      return { mid: parseFloat(book.market.lastTradePrice), source: "last_trade", range1h: 0 };
+      return { mid: parseFloat(book.market.lastTradePrice), source: "last_trade", range1h: 0, bidDepth: 0, askDepth: 0 };
     }
 
-    // Fallback: use best available side
-    if (hasBids) return { mid: parseFloat(book.bids[0].price), source: "bid_only", range1h: 0 };
-    if (hasAsks) return { mid: parseFloat(book.asks[0].price), source: "ask_only", range1h: 0 };
+    if (hasBids) return { mid: parseFloat(book.bids[0].price), source: "bid_only", range1h: 0, bidDepth: parseFloat(book.bids[0].size || "0"), askDepth: 0 };
+    if (hasAsks) return { mid: parseFloat(book.asks[0].price), source: "ask_only", range1h: 0, bidDepth: 0, askDepth: parseFloat(book.asks[0].size || "0") };
   } catch {
     // silent
   }
-  return { mid: 0.5, source: "fallback", range1h: 0 };
+  return { mid: 0, source: "empty", range1h: 0, bidDepth: 0, askDepth: 0 };
 }
 
 // ─── Fetch external oracle price for crypto markets ───
+const CRYPTO_KEYWORDS = ["BTC", "ETH", "SOL", "DOGE", "XRP", "ADA", "Up or Down", "5m"];
+
+function isCryptoMarket(question: string): boolean {
+  const upper = question.toUpperCase();
+  return CRYPTO_KEYWORDS.some(k => upper.includes(k.toUpperCase()));
+}
+
 async function getExternalPrice(marketQuestion: string): Promise<number | null> {
   const cryptoMap: Record<string, string> = {
     BTC: "BTCUSDT", ETH: "ETHUSDT", SOL: "SOLUSDT",
@@ -96,58 +122,75 @@ async function getExternalPrice(marketQuestion: string): Promise<number | null> 
   return null;
 }
 
+// ─── Fetch sponsor/rewards data from CLOB ───
+async function getSponsorPool(conditionId: string): Promise<number> {
+  try {
+    const res = await fetch(`${CLOB_HOST}/rewards?conditionId=${conditionId}`);
+    if (res.ok) {
+      const data = await res.json();
+      return parseFloat(data?.rewardsAmount || data?.daily_reward_amount || data?.rewards_daily_rate || "0");
+    }
+  } catch { /* silent */ }
+  return 0;
+}
+
 // ─── Score market for sponsor rewards prioritization ───
-function scoreMarket(market: any): number {
-  const volume24h = parseFloat(market.volume24hr || market.volume || "0");
-  const sponsorPool = parseFloat(market.rewardsDaily || market.rewardPoolSize || market.liquidityRewards || "0");
-  return volume24h * (sponsorPool / 1000 + 1);
+function scoreMarket(volume24h: number, sponsorPool: number, liquidityDepth: number): number {
+  return volume24h * (sponsorPool / 1000 + 1) + liquidityDepth * 0.1;
 }
 
 // ─── Dynamic spread calculation ───
-function calcDynamicSpread(baseBp: number, sponsorPool: number, range1h: number): number {
+function calcDynamicSpread(baseBp: number, sponsorPool: number, range1h: number): { finalBp: number; sponsorAdj: string; volAdj: string } {
   let spread = baseBp;
-  // Reduce spread for high-reward markets (more competitive)
-  if (sponsorPool > 2000) spread *= 0.5;
-  else if (sponsorPool > 1000) spread *= 0.7;
+  let sponsorAdj = "";
+  let volAdj = "";
+
+  // Reduce spread for high-reward markets
+  if (sponsorPool > 2000) { spread *= 0.5; sponsorAdj = "-50%"; }
+  else if (sponsorPool > 1000) { spread *= 0.7; sponsorAdj = "-30%"; }
+  else if (sponsorPool > 500) { spread *= 0.85; sponsorAdj = "-15%"; }
+
   // Increase spread for volatile markets
-  if (range1h > 4) spread *= 1.4;
-  else if (range1h > 2) spread *= 1.2;
-  // Clamp
-  return Math.max(5, Math.min(60, Math.round(spread)));
+  if (range1h > 4) { spread *= 1.4; volAdj = "+40%"; }
+  else if (range1h > 2) { spread *= 1.2; volAdj = "+20%"; }
+
+  const finalBp = Math.max(5, Math.min(60, Math.round(spread)));
+  return { finalBp, sponsorAdj, volAdj };
 }
 
 // ─── Skew adjustment ───
 function applySkew(
   buyPrice: number, sellPrice: number, orderSize: number,
   netPos: number, maxPos: number, baseBp: number
-): { buyPrice: number; sellPrice: number; buySize: number; sellSize: number; pauseBuy: boolean; pauseSell: boolean } {
+): { buyPrice: number; sellPrice: number; buySize: number; sellSize: number; pauseBuy: boolean; pauseSell: boolean; skewLabel: string } {
   const spreadDecimal = baseBp / 10000;
   let buySize = orderSize;
   let sellSize = orderSize;
   let pauseBuy = false;
   let pauseSell = false;
+  let skewLabel = "none";
 
   const threshold = maxPos * 0.6;
 
   if (netPos > threshold) {
-    // Long heavy → discourage buys, encourage sells
-    buyPrice -= spreadDecimal * 0.5; // widen buy
-    sellPrice -= spreadDecimal * 0.3; // tighten sell
+    buyPrice -= spreadDecimal * 0.5;
+    sellPrice -= spreadDecimal * 0.3;
     buySize = Math.max(1, Math.round(orderSize * 0.5));
+    skewLabel = `LONG heavy → buy×0.5/spread×1.5, sell×1.0/spread×0.7`;
   } else if (netPos < -threshold) {
-    // Short heavy → discourage sells, encourage buys
     sellPrice += spreadDecimal * 0.5;
     buyPrice += spreadDecimal * 0.3;
     sellSize = Math.max(1, Math.round(orderSize * 0.5));
+    skewLabel = `SHORT heavy → sell×0.5/spread×1.5, buy×1.0/spread×0.7`;
   }
 
-  if (netPos > maxPos) pauseBuy = true;
-  if (netPos < -maxPos) pauseSell = true;
+  if (netPos > maxPos) { pauseBuy = true; skewLabel = `PAUSED BUY (pos=${netPos.toFixed(0)}>${maxPos})`; }
+  if (netPos < -maxPos) { pauseSell = true; skewLabel = `PAUSED SELL (pos=${netPos.toFixed(0)}<-${maxPos})`; }
 
   buyPrice = Math.max(0.01, buyPrice);
   sellPrice = Math.min(0.99, sellPrice);
 
-  return { buyPrice, sellPrice, buySize, sellSize, pauseBuy, pauseSell };
+  return { buyPrice, sellPrice, buySize, sellSize, pauseBuy, pauseSell, skewLabel };
 }
 
 // ─── DB helpers ───
@@ -190,7 +233,6 @@ async function upsertDailyPnl(sb: any, pnl: number, totalCapital: number, tradeC
   }, { onConflict: "date" });
 }
 
-// ─── Check if order price is within tolerance ───
 function isWithinTolerance(existingPrice: number, targetPrice: number, toleranceBp: number = 0.5): boolean {
   const diff = Math.abs(existingPrice - targetPrice);
   return diff <= toleranceBp / 10000;
@@ -231,6 +273,7 @@ serve(async (req) => {
           balance: 0, openPositions: 0, totalValue: 0,
           openOrders: 0, pnl: 0, cumulativePnl: 0,
           positions: [], circuitBreaker: false,
+          sponsoredMarkets: 0, totalMarkets: 0, avgSponsor: 0,
         };
 
         try {
@@ -310,12 +353,13 @@ serve(async (req) => {
         const sb = getSupabase();
         const logs: string[] = [];
 
-        const maxMarkets = params.maxMarkets || 5;
+        const maxMarkets = params.maxMarkets || 30;
         const baseBp = params.spread || 15;
         const orderSize = params.orderSize || 50;
         const paperTrading = params.paperTrading ?? true;
         const maxPosition = params.maxPosition || 250;
-        const minSponsorPool = params.minSponsorPool || 300;
+        const minSponsorPool = params.minSponsorPool ?? 0;
+        const minLiquidityDepth = params.minLiquidityDepth || 300;
         const totalCapital = params.totalCapital || 1000;
         const useExternalOracle = params.useExternalOracle || false;
 
@@ -340,33 +384,89 @@ serve(async (req) => {
           );
         }
 
-        // ── 1. Fetch & score markets ──
-        logs.push(`📊 Загрузка рынков (мин. спонсор: $${minSponsorPool})...`);
-        const allMarkets = await getMarkets(maxMarkets);
-
-        // Score and filter by sponsor rewards
-        const scored = allMarkets.map((m: any) => ({
-          ...m,
-          sponsorPool: parseFloat(m.rewardsDaily || m.rewardPoolSize || m.liquidityRewards || "0"),
-          score: scoreMarket(m),
-        }));
-
-        // Sort by score, prefer sponsored markets
-        scored.sort((a: any, b: any) => b.score - a.score);
-
-        // Filter: only sponsored markets if enough, otherwise fall back to volume
-        let selectedMarkets = scored.filter((m: any) => m.sponsorPool >= minSponsorPool);
-        if (selectedMarkets.length < maxMarkets) {
-          // Fill remaining slots with top volume markets
-          const remaining = scored.filter((m: any) => !selectedMarkets.includes(m));
-          selectedMarkets = [...selectedMarkets, ...remaining].slice(0, maxMarkets);
-        } else {
-          selectedMarkets = selectedMarkets.slice(0, maxMarkets);
+        // ── 1. Fetch top 100 active markets from Gamma API ──
+        logs.push(`📊 Загрузка рынков (мин. спонсор: $${minSponsorPool}, мин. глубина: $${minLiquidityDepth})...`);
+        let allMarkets: any[];
+        try {
+          allMarkets = await getMarkets(100);
+        } catch (e) {
+          logs.push(`❌ Ошибка загрузки рынков: ${e.message}`);
+          return new Response(
+            JSON.stringify({ ok: true, logs, ordersPlaced: 0 }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
 
-        logs.push(`✅ Выбрано ${selectedMarkets.length} рынков (${selectedMarkets.filter((m: any) => m.sponsorPool > 0).length} со спонсорами)`);
+        // ── 2. Enrich each market with sponsor pool & orderbook depth ──
+        const enriched: any[] = [];
+        for (const m of allMarkets) {
+          if (!m.clobTokenIds || m.clobTokenIds.length === 0) continue;
+          const tokenId = m.clobTokenIds[0];
 
-        // ── 2. Get current open orders (for selective update) ──
+          // Get sponsor pool
+          const conditionId = m.conditionId || m.id || "";
+          const gammaReward = parseFloat(m.rewardsDaily || m.rewardPoolSize || m.liquidityRewards || "0");
+          let sponsorPool = gammaReward;
+          if (sponsorPool === 0 && conditionId) {
+            sponsorPool = await getSponsorPool(conditionId);
+          }
+
+          // Get orderbook depth (quick check)
+          const { mid, source, range1h, bidDepth, askDepth } = await getMidPrice(client, tokenId);
+          const liquidityDepth = bidDepth + askDepth;
+
+          const volume24h = parseFloat(m.volume24hr || m.volume || "0");
+          const score = scoreMarket(volume24h, sponsorPool, liquidityDepth);
+
+          enriched.push({
+            ...m,
+            tokenId,
+            conditionId,
+            sponsorPool,
+            volume24h,
+            liquidityDepth,
+            mid,
+            midSource: source,
+            range1h,
+            bidDepth,
+            askDepth,
+            score,
+          });
+        }
+
+        // ── 3. Filter & select top-N ──
+        // Skip markets with empty orderbook / fallback mid
+        const validMarkets = enriched.filter(m => {
+          if (m.mid === 0 || m.midSource === "empty") {
+            return false;
+          }
+          return true;
+        });
+
+        // Apply filters
+        const filtered = validMarkets.filter(m => {
+          if (m.sponsorPool < minSponsorPool) return false;
+          if (m.liquidityDepth < minLiquidityDepth) return false;
+          return true;
+        });
+
+        filtered.sort((a, b) => b.score - a.score);
+        const selectedMarkets = filtered.slice(0, maxMarkets);
+
+        const sponsoredCount = selectedMarkets.filter(m => m.sponsorPool > 0).length;
+        const totalSponsor = selectedMarkets.reduce((s, m) => s + m.sponsorPool, 0);
+        const avgSponsor = selectedMarkets.length > 0 ? totalSponsor / selectedMarkets.length : 0;
+
+        logs.push(`✅ Найдено ${validMarkets.length} рынков с ордербуками, ${enriched.filter(m => m.sponsorPool > 0).length} со спонсорами, ${filtered.length} прошли фильтр`);
+        logs.push(`🎯 Выбрано ${selectedMarkets.length} рынков (${sponsoredCount} со спонсорами, avg=$${avgSponsor.toFixed(0)})`);
+
+        // ── Log full market list ──
+        for (const m of selectedMarkets) {
+          const name = (m.question || "Unknown").slice(0, 45);
+          logs.push(`  📋 ${name} | vol=$${m.volume24h.toFixed(0)} | sponsor=$${m.sponsorPool.toFixed(0)} | depth=$${m.liquidityDepth.toFixed(0)} | score=${m.score.toFixed(0)}`);
+        }
+
+        // ── 4. Get current open orders (for selective update) ──
         let existingOrders: any[] = [];
         if (!paperTrading) {
           try {
@@ -377,55 +477,67 @@ serve(async (req) => {
           }
         }
 
-        // ── 3. Process each market ──
+        // ── 5. Process each market ──
         for (const market of selectedMarkets) {
-          if (!market.clobTokenIds || market.clobTokenIds.length === 0) {
-            logs.push(`⏭️ ${(market.question || "").slice(0, 40)}... — нет tokenId`);
-            continue;
-          }
-
-          const tokenId = market.clobTokenIds[0];
+          const tokenId = market.tokenId;
           const negRisk = market.negRisk ?? false;
           const marketId = market.conditionId || market.id || tokenId;
           const marketName = (market.question || "Unknown").slice(0, 50);
 
-          // Get mid price with fallback chain
-          let { mid: midPrice, source: priceSource, range1h } = await getMidPrice(client, tokenId);
+          let midPrice = market.mid;
+          const priceSource = market.midSource;
+          const range1h = market.range1h;
 
-          // Optional external oracle for crypto
-          if (useExternalOracle) {
+          // FIX #2: skip if mid is fallback (0.5 or empty)
+          if (midPrice === 0 || priceSource === "empty" || priceSource === "fallback") {
+            logs.push(`  ⏭️ [SKIP] ${marketName}: ${priceSource === "empty" ? "empty orderbook" : "fallback mid"}`);
+            continue;
+          }
+
+          // External oracle for crypto markets
+          if (useExternalOracle && isCryptoMarket(market.question || "")) {
             const extPrice = await getExternalPrice(market.question || "");
             if (extPrice !== null) {
               logs.push(`  🔮 Внешний оракул: ${extPrice} (${priceSource} mid: ${midPrice.toFixed(4)})`);
-              // Use external as reference, don't override polymarket mid
             }
           }
 
-          // Dynamic spread
-          const dynamicBp = calcDynamicSpread(baseBp, market.sponsorPool || 0, range1h);
+          // FIX #4: Dynamic spread with visibility
+          const { finalBp: dynamicBp, sponsorAdj, volAdj } = calcDynamicSpread(baseBp, market.sponsorPool || 0, range1h);
 
-          // Get net position for skew
+          // FIX #3: Get net position for skew
           const netPos = await getNetPosition(sb, marketId);
 
           // Calculate base prices
           const spreadDecimal = dynamicBp / 10000;
-          let buyPrice = midPrice - spreadDecimal;
-          let sellPrice = midPrice + spreadDecimal;
+          const buyPrice = midPrice - spreadDecimal;
+          const sellPrice = midPrice + spreadDecimal;
 
           // Apply skew
           const skew = applySkew(buyPrice, sellPrice, orderSize, netPos, maxPosition, dynamicBp);
 
-          const sponsorLabel = market.sponsorPool > 0 ? ` 🏆$${market.sponsorPool}` : "";
-          logs.push(`📈 ${marketName}: mid=${midPrice.toFixed(4)} (${priceSource}) spread=${dynamicBp}bp${sponsorLabel}`);
-          if (Math.abs(netPos) > 0.01) {
-            logs.push(`  📊 Позиция: ${netPos.toFixed(2)} USDC | Skew: buy=${skew.buySize}, sell=${skew.sellSize}`);
+          // FIX #4: Detailed spread log
+          const sponsorLabel = market.sponsorPool > 0 ? ` 🏆$${market.sponsorPool.toFixed(0)}` : "";
+          let spreadDetail = `${dynamicBp}bp`;
+          if (sponsorAdj || volAdj) {
+            spreadDetail += ` (base ${baseBp}bp`;
+            if (sponsorAdj) spreadDetail += ` sponsor ${sponsorAdj}`;
+            if (volAdj) spreadDetail += ` vol ${volAdj}`;
+            spreadDetail += `)`;
+          }
+          logs.push(`📈 ${marketName}: mid=${midPrice.toFixed(4)} (${priceSource}) spread=${spreadDetail}${sponsorLabel}`);
+
+          // FIX #3: Skew log
+          if (skew.skewLabel !== "none") {
+            logs.push(`  ⚖️ SKEW ACTIVATED: pos=${netPos.toFixed(1)} → ${skew.skewLabel}`);
+          } else if (Math.abs(netPos) > 0.01) {
+            logs.push(`  📊 Позиция: ${netPos.toFixed(2)} USDC (no skew)`);
           }
 
           if (paperTrading) {
             // ── Paper mode ──
             if (!skew.pauseBuy) {
               logs.push(`  📝 [PAPER] BUY @ ${skew.buyPrice.toFixed(4)} (${skew.buySize} USDC)`);
-              // Simulate partial fill (50% chance)
               if (Math.random() > 0.5) {
                 const fillSize = Math.round(skew.buySize * (0.3 + Math.random() * 0.7));
                 await updateNetPosition(sb, marketId, marketName, tokenId, fillSize);
@@ -463,7 +575,6 @@ serve(async (req) => {
               if (existingBuy && isWithinTolerance(parseFloat(existingBuy.price), skew.buyPrice)) {
                 logs.push(`  ♻️ BUY @ ${parseFloat(existingBuy.price).toFixed(4)} в пределах допуска — оставлен`);
               } else {
-                // Cancel existing if any
                 if (existingBuy) {
                   try {
                     await client.cancelOrder(existingBuy.id);
@@ -473,7 +584,6 @@ serve(async (req) => {
                     logs.push(`  ⚠️ Ошибка отмены BUY: ${e.message}`);
                   }
                 }
-                // Place new
                 try {
                   const buyOrder = await client.createAndPostOrder(
                     { tokenID: tokenId, price: parseFloat(skew.buyPrice.toFixed(2)), size: skew.buySize, side: "BUY" },
@@ -487,7 +597,6 @@ serve(async (req) => {
                   logs.push(`  ❌ BUY failed: ${e.message}`);
                 }
               }
-              // Cancel extra buys
               for (const extra of myBuys.slice(1)) {
                 try { await client.cancelOrder(extra.id); } catch { /* silent */ }
               }
@@ -542,7 +651,12 @@ serve(async (req) => {
         logs.push(`${modeLabel} Итого: ${orders.length} ордеров ${paperTrading ? "симулировано" : "размещено/обновлено"}`);
 
         return new Response(
-          JSON.stringify({ ok: true, logs, ordersPlaced: orders.length }),
+          JSON.stringify({
+            ok: true, logs, ordersPlaced: orders.length,
+            sponsoredMarkets: sponsoredCount,
+            totalMarkets: selectedMarkets.length,
+            avgSponsor: parseFloat(avgSponsor.toFixed(2)),
+          }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }

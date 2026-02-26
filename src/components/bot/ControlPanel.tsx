@@ -15,6 +15,7 @@ const sliders = [
   { key: "maxMarkets" as const, label: "📊 Макс. рынков", min: 1, max: 125, step: 1, unit: "" },
   { key: "maxPosition" as const, label: "🛡️ Макс. позиция / рынок", min: 100, max: 1000, step: 10, unit: "USDC" },
   { key: "minSponsorPool" as const, label: "🏆 Мин. спонсорский пул", min: 0, max: 2000, step: 50, unit: "$" },
+  { key: "minLiquidityDepth" as const, label: "💧 Мин. глубина ликвидности", min: 100, max: 2000, step: 50, unit: "$" },
   { key: "totalCapital" as const, label: "💼 Общий капитал", min: 100, max: 10000, step: 100, unit: "USDC" },
 ];
 

@@ -16,6 +16,7 @@ export interface BotConfig {
   paperTrading: boolean;
   maxPosition: number;
   minSponsorPool: number;
+  minLiquidityDepth: number;
   totalCapital: number;
   useExternalOracle: boolean;
 }
@@ -24,10 +25,11 @@ const DEFAULT_CONFIG: BotConfig = {
   orderSize: 50,
   spread: 15,
   interval: 8,
-  maxMarkets: 5,
+  maxMarkets: 30,
   paperTrading: true,
   maxPosition: 250,
-  minSponsorPool: 300,
+  minSponsorPool: 0,
+  minLiquidityDepth: 300,
   totalCapital: 1000,
   useExternalOracle: false,
 };
@@ -40,6 +42,7 @@ export function useBotState() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [circuitBreaker, setCircuitBreaker] = useState(false);
+  const [sponsorStats, setSponsorStats] = useState({ sponsored: 0, total: 0, avgSponsor: 0 });
   const logIdRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -88,6 +91,7 @@ export function useBotState() {
         paperTrading: config.paperTrading,
         maxPosition: config.maxPosition,
         minSponsorPool: config.minSponsorPool,
+        minLiquidityDepth: config.minLiquidityDepth,
         totalCapital: config.totalCapital,
         useExternalOracle: config.useExternalOracle,
       });
@@ -102,11 +106,20 @@ export function useBotState() {
         addLog("error", "🚨 CIRCUIT BREAKER: бот остановлен автоматически!");
       }
 
+      // Update sponsor stats from cycle response
+      if (data.sponsoredMarkets !== undefined) {
+        setSponsorStats({
+          sponsored: data.sponsoredMarkets || 0,
+          total: data.totalMarkets || 0,
+          avgSponsor: data.avgSponsor || 0,
+        });
+      }
+
       if (data.logs) {
         data.logs.forEach((msg: string) => {
           const level = msg.includes("❌") || msg.includes("🚨")
             ? "error"
-            : msg.includes("⚠️") || msg.includes("⏸️")
+            : msg.includes("⚠️") || msg.includes("⏸️") || msg.includes("⏭️") || msg.includes("[SKIP]")
             ? "warn"
             : msg.includes("✅") || msg.includes("♻️")
             ? "success"
@@ -123,7 +136,7 @@ export function useBotState() {
     setCircuitBreaker(false);
     setIsRunning(true);
     addLog("success", "🚀 Бот запущен! Подключение к Polymarket CLOB...");
-    addLog("info", `⚙️ Конфигурация: ордер=${config.orderSize} USDC, спред=${config.spread}bp, интервал=${config.interval}с, рынков=${config.maxMarkets}, макс.позиция=${config.maxPosition} USDC`);
+    addLog("info", `⚙️ Конфигурация: ордер=${config.orderSize} USDC, спред=${config.spread}bp, интервал=${config.interval}с, рынков=${config.maxMarkets}, макс.позиция=${config.maxPosition} USDC, мин.глубина=${config.minLiquidityDepth}$`);
 
     if (!isConnected) {
       await connectBot();
@@ -163,5 +176,5 @@ export function useBotState() {
     };
   }, []);
 
-  return { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker };
+  return { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker, sponsorStats };
 }
