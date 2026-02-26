@@ -457,17 +457,31 @@ serve(async (req) => {
         const sb = getSupabase();
         const logs: string[] = [];
 
-        const maxMarkets = params.maxMarkets || 20;
-        const baseBp = params.spread || 15;
-        const orderSize = params.orderSize || 50;
-        const paperTrading = params.paperTrading ?? true;
-        const maxPosition = params.maxPosition || 250;
-        const minSponsorPool = params.minSponsorPool ?? 0;
-        const minLiquidityDepth = params.minLiquidityDepth || 80;
-        const minVolume24h = params.minVolume24h || 1000;
-        const totalCapital = params.totalCapital || 1000;
+        const maxMarkets = params.maxMarkets || 8;
+        const baseBp = params.spread || 18;
+        let orderSize = params.orderSize || 5;
+        let paperTrading = params.paperTrading ?? true;
+        const maxPosition = params.maxPosition || 32;
+        const minSponsorPool = params.minSponsorPool ?? 250;
+        const minLiquidityDepth = params.minLiquidityDepth || 120;
+        const minVolume24h = params.minVolume24h || 4000;
+        const totalCapital = params.totalCapital || 65;
         const useExternalOracle = params.useExternalOracle || false;
         const aggressiveShortTerm = params.aggressiveShortTerm ?? true;
+
+        // ── Auto-protect: order size never exceeds 8% of capital ──
+        orderSize = Math.min(orderSize, Math.floor(totalCapital * 0.08));
+        if (orderSize < 1) orderSize = 1;
+
+        // ── Small capital safety ──
+        if (totalCapital < 150) {
+          logs.push("⚠️ КАПИТАЛ МАЛЕНЬКИЙ ($" + totalCapital + ") — бот запущен в PAPER-режиме для безопасности");
+          paperTrading = true;
+        }
+
+        if (!paperTrading) {
+          logs.push("⚠️ ВНИМАНИЕ: реальная торговля с $" + totalCapital + " — возможны редкие филлы и маленькая прибыль");
+        }
 
         const orders: any[] = [];
 
