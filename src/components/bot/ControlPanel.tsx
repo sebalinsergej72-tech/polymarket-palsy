@@ -8,7 +8,7 @@ interface ControlPanelProps {
 }
 
 const controls = [
-  { key: "orderSize" as const, label: "💰 Размер ордера (USDC)", min: 10, max: 500, step: 5, unit: "USDC" },
+  { key: "orderSize" as const, label: "💰 Размер ордера (USDC)", min: 1, max: 500, step: 1, unit: "USDC" },
   { key: "spread" as const, label: "📐 Спред (basis points)", min: 5, max: 60, step: 1, unit: "bp" },
   { key: "interval" as const, label: "⏱️ Интервал обновления", min: 5, max: 30, step: 1, unit: "сек" },
   { key: "maxMarkets" as const, label: "📊 Макс. рынков", min: 1, max: 12, step: 1, unit: "" },
