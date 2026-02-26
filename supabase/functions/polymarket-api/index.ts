@@ -281,12 +281,12 @@ function applySkew(
   if (netPos > threshold) {
     buyPrice -= spreadDecimal * 0.5;
     sellPrice -= spreadDecimal * 0.3;
-    buySize = Math.max(1, Math.round(orderSize * 0.5));
+    buySize = Math.max(2, Math.round(orderSize * 0.5));
     skewLabel = `LONG heavy → buy×0.5/spread×1.5, sell×1.0/spread×0.7`;
   } else if (netPos < -threshold) {
     sellPrice += spreadDecimal * 0.5;
     buyPrice += spreadDecimal * 0.3;
-    sellSize = Math.max(1, Math.round(orderSize * 0.5));
+    sellSize = Math.max(2, Math.round(orderSize * 0.5));
     skewLabel = `SHORT heavy → sell×0.5/spread×1.5, buy×1.0/spread×0.7`;
   }
 
@@ -461,7 +461,7 @@ serve(async (req) => {
         const baseBp = params.spread || 18;
         let orderSize = params.orderSize || 5;
         let paperTrading = params.paperTrading ?? true;
-        const maxPosition = params.maxPosition || 32;
+        const maxPosition = Math.min(params.maxPosition || 32, Math.floor(totalCapital * 0.48));
         const minSponsorPool = params.minSponsorPool ?? 250;
         const minLiquidityDepth = params.minLiquidityDepth || 120;
         const minVolume24h = params.minVolume24h || 4000;
@@ -508,7 +508,7 @@ serve(async (req) => {
         logs.push(`📊 Загрузка рынков (мин.объём: $${minVolume24h}, мин.глубина: $${minLiquidityDepth}, aggressive: ${aggressiveShortTerm ? "ON" : "OFF"})...`);
         let allMarkets: any[];
         try {
-          allMarkets = await getMarkets(150);
+          allMarkets = await getMarkets(90);
         } catch (e) {
           logs.push(`❌ Ошибка загрузки рынков: ${e.message}`);
           return new Response(
@@ -524,7 +524,7 @@ serve(async (req) => {
         });
 
         // Limit enrichment to avoid timeout
-        const marketsToEnrich = volumeFiltered.slice(0, Math.min(maxMarkets * 2, 60));
+        const marketsToEnrich = volumeFiltered.slice(0, Math.min(maxMarkets * 3, 50));
 
         // ── 3. Enrich with orderbook depth + sponsor data ──
         const enriched: any[] = [];
@@ -739,7 +739,7 @@ serve(async (req) => {
             // ── Paper mode ──
             if (!skew.pauseBuy) {
               logs.push(`  📝 [PAPER] BUY @ ${skew.buyPrice.toFixed(4)} (${skew.buySize} USDC)`);
-              if (Math.random() > 0.5) {
+              if (Math.random() < (dynamicBp <= 12 ? 0.65 : 0.40)) {
                 const fillSize = Math.round(skew.buySize * (0.3 + Math.random() * 0.7));
                 await updateNetPosition(sb, marketId, marketName, tokenId, fillSize);
                 await upsertDailyPnl(sb, spreadDecimal * fillSize * 0.5, totalCapital, 1, false);
@@ -751,7 +751,7 @@ serve(async (req) => {
             }
             if (!skew.pauseSell) {
               logs.push(`  📝 [PAPER] SELL @ ${skew.sellPrice.toFixed(4)} (${skew.sellSize} USDC)`);
-              if (Math.random() > 0.5) {
+              if (Math.random() < (dynamicBp <= 12 ? 0.65 : 0.40)) {
                 const fillSize = Math.round(skew.sellSize * (0.3 + Math.random() * 0.7));
                 await updateNetPosition(sb, marketId, marketName, tokenId, -fillSize);
                 await upsertDailyPnl(sb, spreadDecimal * fillSize * 0.5, totalCapital, 1, false);
