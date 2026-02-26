@@ -1,0 +1,17 @@
+{
+  "name": "polymarket-mm-bot",
+  "version": "1.0.0",
+  "description": "Polymarket Market-Making Bot for Railway.app",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@polymarket/clob-client": "^4.22.8",
+    "ethers": "^5.7.2",
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
