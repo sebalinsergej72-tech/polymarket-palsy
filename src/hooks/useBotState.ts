@@ -14,6 +14,10 @@ export interface BotConfig {
   interval: number;
   maxMarkets: number;
   paperTrading: boolean;
+  maxPosition: number;
+  minSponsorPool: number;
+  totalCapital: number;
+  useExternalOracle: boolean;
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -22,6 +26,10 @@ const DEFAULT_CONFIG: BotConfig = {
   interval: 8,
   maxMarkets: 5,
   paperTrading: true,
+  maxPosition: 250,
+  minSponsorPool: 300,
+  totalCapital: 1000,
+  useExternalOracle: false,
 };
 
 const MAX_LOGS = 200;
@@ -31,6 +39,7 @@ export function useBotState() {
   const [isConnected, setIsConnected] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
+  const [circuitBreaker, setCircuitBreaker] = useState(false);
   const logIdRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -38,10 +47,7 @@ export function useBotState() {
     const entry: LogEntry = {
       id: logIdRef.current++,
       timestamp: new Date().toLocaleTimeString("ru-RU", {
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
+        hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit",
       }),
       level,
       message,
@@ -80,14 +86,29 @@ export function useBotState() {
         spread: config.spread,
         maxMarkets: config.maxMarkets,
         paperTrading: config.paperTrading,
+        maxPosition: config.maxPosition,
+        minSponsorPool: config.minSponsorPool,
+        totalCapital: config.totalCapital,
+        useExternalOracle: config.useExternalOracle,
       });
+
+      if (data.circuitBreaker) {
+        setCircuitBreaker(true);
+        setIsRunning(false);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        addLog("error", "🚨 CIRCUIT BREAKER: бот остановлен автоматически!");
+      }
+
       if (data.logs) {
         data.logs.forEach((msg: string) => {
-          const level = msg.includes("❌")
+          const level = msg.includes("❌") || msg.includes("🚨")
             ? "error"
-            : msg.includes("⚠️")
+            : msg.includes("⚠️") || msg.includes("⏸️")
             ? "warn"
-            : msg.includes("✅")
+            : msg.includes("✅") || msg.includes("♻️")
             ? "success"
             : "info";
           addLog(level, msg);
@@ -99,18 +120,17 @@ export function useBotState() {
   }, [addLog, callApi, config]);
 
   const startBot = useCallback(async () => {
+    setCircuitBreaker(false);
     setIsRunning(true);
     addLog("success", "🚀 Бот запущен! Подключение к Polymarket CLOB...");
-    addLog("info", `⚙️ Конфигурация: ордер=${config.orderSize} USDC, спред=${config.spread}bp, интервал=${config.interval}с, рынков=${config.maxMarkets}`);
+    addLog("info", `⚙️ Конфигурация: ордер=${config.orderSize} USDC, спред=${config.spread}bp, интервал=${config.interval}с, рынков=${config.maxMarkets}, макс.позиция=${config.maxPosition} USDC`);
 
     if (!isConnected) {
       await connectBot();
     }
 
-    // Run first cycle immediately
     await runCycle();
 
-    // Schedule subsequent cycles
     intervalRef.current = setInterval(() => {
       runCycle();
     }, config.interval * 1000);
@@ -143,5 +163,5 @@ export function useBotState() {
     };
   }, []);
 
-  return { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot };
+  return { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker };
 }

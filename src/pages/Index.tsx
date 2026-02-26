@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 
 const Index = () => {
-  const { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot } = useBotState();
+  const { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot, circuitBreaker } = useBotState();
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
@@ -20,13 +20,13 @@ const Index = () => {
             🚀 Polymarket Market-Making Bot
           </h1>
           <p className="font-mono text-sm text-muted-foreground">
-            Реальная торговля на Polymarket CLOB • L2 Auth • Работает 24/7 в облаке
+            Sponsor Rewards • Selective Updates • Inventory Skew • Circuit Breaker
           </p>
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
           {/* Sidebar */}
-          <aside className="space-y-6 rounded-xl border border-border bg-card p-5">
+          <aside className="space-y-4 rounded-xl border border-border bg-card p-5">
             <div className="flex items-center gap-2 text-accent">
               <Zap className="h-4 w-4" />
               <span className="font-display text-sm font-semibold uppercase tracking-widest">Панель управления</span>
@@ -64,7 +64,7 @@ const Index = () => {
 
             <div className="rounded-md border border-border bg-muted/50 p-3">
               <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-                ℹ️ Бот использует ваш приватный ключ для деривации L2 API credentials и торговли через Polymarket CLOB API.
+                ℹ️ Selective order updates • Sponsor rewards scoring • Inventory skew • Circuit breaker @ 3% daily loss
               </p>
             </div>
           </aside>
@@ -79,7 +79,7 @@ const Index = () => {
               </div>
             </div>
 
-            <StatsPanel isConnected={isConnected} isRunning={isRunning} />
+            <StatsPanel isConnected={isConnected} isRunning={isRunning} circuitBreaker={circuitBreaker} />
 
             <ActionButtons isRunning={isRunning} onStart={startBot} onStop={stopBot} />
 
@@ -88,7 +88,7 @@ const Index = () => {
         </div>
 
         <footer className="text-center font-mono text-xs text-muted-foreground">
-          Polymarket MM Bot Dashboard © 2026 • React + Lovable Cloud • Live CLOB Trading
+          Polymarket MM Bot v2.0 © 2026 • Selective Updates • Sponsor Rewards • Risk Management
         </footer>
       </div>
     </div>
