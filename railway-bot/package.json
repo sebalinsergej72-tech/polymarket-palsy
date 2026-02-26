@@ -1,7 +1,7 @@
 {
   "name": "polymarket-mm-bot",
   "version": "1.0.0",
-  "description": "Polymarket Market-Making Bot for Railway.app",
+  "description": "Polymarket Market-Making Bot for Railway.app (no proxy)",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
