@@ -14,9 +14,9 @@ const sliders = [
   { key: "interval" as const, label: "⏱️ Интервал обновления", min: 5, max: 30, step: 1, unit: "сек" },
   { key: "maxMarkets" as const, label: "📊 Макс. рынков", min: 1, max: 125, step: 1, unit: "" },
   { key: "maxPosition" as const, label: "🛡️ Макс. позиция / рынок", min: 100, max: 1000, step: 10, unit: "USDC" },
-  { key: "minVolume24h" as const, label: "📈 Мин. 24ч объём", min: 2000, max: 50000, step: 1000, unit: "USDC" },
+  { key: "minVolume24h" as const, label: "📈 Мин. 24ч объём", min: 1000, max: 50000, step: 500, unit: "USDC" },
   { key: "minSponsorPool" as const, label: "🏆 Мин. спонсорский пул", min: 0, max: 2000, step: 50, unit: "$" },
-  { key: "minLiquidityDepth" as const, label: "💧 Мин. глубина ликвидности", min: 100, max: 2000, step: 50, unit: "$" },
+  { key: "minLiquidityDepth" as const, label: "💧 Мин. глубина ликвидности", min: 80, max: 2000, step: 20, unit: "$" },
   { key: "totalCapital" as const, label: "💼 Общий капитал", min: 100, max: 10000, step: 100, unit: "USDC" },
 ];
 
@@ -45,6 +45,23 @@ const ControlPanel = ({ config, onUpdate, disabled }: ControlPanelProps) => {
           />
         </div>
       ))}
+
+      {/* Aggressive Short-term Priority toggle */}
+      <div className="flex items-center justify-between rounded-md border border-border bg-muted/50 p-2.5">
+        <div className="space-y-0.5">
+          <span className="text-xs font-semibold text-foreground">
+            🚀 Aggressive Short-term Priority
+          </span>
+          <p className="font-mono text-[10px] text-muted-foreground">
+            +15K crypto/5min, +8K macro/sports
+          </p>
+        </div>
+        <Switch
+          checked={config.aggressiveShortTerm}
+          onCheckedChange={(v) => onUpdate({ aggressiveShortTerm: v })}
+          disabled={disabled}
+        />
+      </div>
 
       {/* Oracle toggle */}
       <div className="flex items-center justify-between rounded-md border border-border bg-muted/50 p-2.5">
