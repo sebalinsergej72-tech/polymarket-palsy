@@ -40,7 +40,6 @@ async function getTradingClient() {
 
 // ─── Gamma API: Fetch top active markets ───
 async function getMarkets(limit: number) {
-  // Use /events endpoint with proper sorting
   const url = `${GAMMA_API}/markets?limit=${Math.min(limit, 150)}&active=true&closed=false&order=volume24hr&ascending=false`;
   const res = await fetch(url);
   if (!res.ok) {
@@ -116,57 +115,112 @@ async function getExternalPrice(marketQuestion: string): Promise<number | null> 
   return null;
 }
 
-// ─── Fetch sponsor/rewards data from CLOB ───
-async function getSponsorPool(conditionId: string): Promise<number> {
+// ─── Fetch sponsor/rewards data from CLOB (multiple methods) ───
+async function getSponsorPool(conditionId: string, tokenId: string): Promise<{ pool: number; method: string }> {
+  // Method 1: CLOB /rewards endpoint
   try {
     const res = await fetch(`${CLOB_HOST}/rewards?conditionId=${conditionId}`);
     if (res.ok) {
       const data = await res.json();
-      return parseFloat(data?.rewardsAmount || data?.daily_reward_amount || data?.rewards_daily_rate || "0");
+      const amount = parseFloat(data?.rewardsAmount || data?.daily_reward_amount || data?.rewards_daily_rate || "0");
+      if (amount > 0) return { pool: amount, method: "clob" };
     }
   } catch { /* silent */ }
-  return 0;
+
+  // Method 2: CLOB /rewards with tokenId
+  try {
+    const res = await fetch(`${CLOB_HOST}/rewards?token_id=${tokenId}`);
+    if (res.ok) {
+      const data = await res.json();
+      // Handle array or object response
+      const rewards = Array.isArray(data) ? data : [data];
+      for (const r of rewards) {
+        const amount = parseFloat(r?.rewardsAmount || r?.daily_reward_amount || r?.rewards_daily_rate || r?.max_spread_bps ? "500" : "0");
+        if (amount > 0 || r?.max_spread_bps) return { pool: amount || 500, method: "clob_token" };
+      }
+    }
+  } catch { /* silent */ }
+
+  // Method 3: CLOB /rewards/markets endpoint
+  try {
+    const res = await fetch(`${CLOB_HOST}/rewards/markets`);
+    if (res.ok) {
+      const data = await res.json();
+      const markets = Array.isArray(data) ? data : data?.markets || [];
+      const found = markets.find((m: any) => m.condition_id === conditionId || m.token_id === tokenId);
+      if (found) {
+        const amount = parseFloat(found.rewards_amount || found.daily_reward_amount || "500");
+        return { pool: amount, method: "rewards_markets" };
+      }
+    }
+  } catch { /* silent */ }
+
+  return { pool: 0, method: "none" };
 }
 
-// ─── Category & Quality Bonus ───
-const POSITIVE_KEYWORDS = [
+// ─── Category & Quality Bonus (RADICAL v4) ───
+const TIER1_KEYWORDS = [
+  "5 min", "15 min", "Up or Down", "this hour", "today", "tomorrow",
+  "temperature", "highest temperature",
   "BTC", "Bitcoin", "ETH", "Ethereum", "SOL",
-  "5 min", "15 min", "Up or Down", "this hour",
-  "February", "Inflation", "Fed",
-  "Trump cabinet", "Tariff", "Approval rating",
-  "ZachXBT", "Khamenei", "US strikes Iran",
-  "NBA", "NFL", "Super Bowl",
-  "temperature", "S&P", "FIFA",
+  "S&P", "SPX", "ZachXBT", "insider trading",
+];
+
+const TIER2_KEYWORDS = [
+  "Fed", "Inflation", "interest rates", "Trump nominate",
+  "US strikes Iran", "NBA", "NHL", "Champions League",
+  "Elon Musk", "Leavitt", "press briefing",
 ];
 
 const NEGATIVE_KEYWORDS = [
-  "2028", "2029", "will win the 2028",
-  "Democratic presidential", "Republican presidential",
-  "Presidential Nominee 2028",
+  "2028", "2029", "Democratic presidential", "Republican presidential",
+  "will win the 2028", "before 2027", "2026 FIFA",
+  "Jesus Christ return", "Uzbekistan",
 ];
 
-function getCategoryBonus(title: string): { bonus: number; category: string } {
+function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTerm: boolean): { bonus: number; category: string } {
   const upper = title.toUpperCase();
   let bonus = 0;
   let category = "other";
 
-  for (const kw of POSITIVE_KEYWORDS) {
+  // Tier 1: +15000
+  for (const kw of TIER1_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
-      bonus += 5000;
-      if (["BTC","Bitcoin","ETH","Ethereum","SOL","5 min","15 min","Up or Down","this hour"].some(k => kw.toUpperCase() === k.toUpperCase())) {
+      bonus += aggressiveShortTerm ? 15000 : 8000;
+      if (["BTC","Bitcoin","ETH","Ethereum","SOL","5 min","15 min","Up or Down","this hour","today","tomorrow"].some(k => kw.toUpperCase() === k.toUpperCase())) {
         category = "crypto/short-term";
-      } else if (["NBA","NFL","Super Bowl","FIFA"].some(k => kw.toUpperCase() === k.toUpperCase())) {
-        category = "sports";
       } else {
         category = "macro";
       }
-      break; // count once
+      break;
     }
   }
 
+  // Tier 2: +8000
+  if (bonus === 0) {
+    for (const kw of TIER2_KEYWORDS) {
+      if (upper.includes(kw.toUpperCase())) {
+        bonus += aggressiveShortTerm ? 8000 : 5000;
+        if (["NBA","NHL","Champions League"].some(k => kw.toUpperCase() === k.toUpperCase())) {
+          category = "sports";
+        } else {
+          category = "macro";
+        }
+        break;
+      }
+    }
+  }
+
+  // Sponsor bonus: +6000 if sponsor_pool > 300
+  if (sponsorPool > 300) {
+    bonus += 6000;
+    if (category === "other") category = "sponsored";
+  }
+
+  // Negative keywords: -5000
   for (const kw of NEGATIVE_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
-      bonus -= 3000;
+      bonus -= 5000;
       category = "long-term";
       break;
     }
@@ -175,9 +229,9 @@ function getCategoryBonus(title: string): { bonus: number; category: string } {
   return { bonus, category };
 }
 
-// ─── New scoring formula ───
+// ─── New scoring formula v4 ───
 function scoreMarket(volume24h: number, sponsorPool: number, liquidityDepth: number, categoryBonus: number): number {
-  return (volume24h * 0.4) + (sponsorPool * 4) + (liquidityDepth * 0.2) + categoryBonus + (sponsorPool > 1000 ? 4000 : 0);
+  return (volume24h * 0.2) + (sponsorPool * 10) + (liquidityDepth * 0.35) + categoryBonus;
 }
 
 // ─── Dynamic spread calculation ───
@@ -385,7 +439,7 @@ serve(async (req) => {
       }
 
       case "run_cycle": {
-        // ═══ PRODUCTION MARKET-MAKING CYCLE v3 — Radical Market Selection ═══
+        // ═══ PRODUCTION MARKET-MAKING CYCLE v4 — Radical Scoring + Sponsor Fix ═══
         const client = await getTradingClient();
         const sb = getSupabase();
         const logs: string[] = [];
@@ -396,10 +450,11 @@ serve(async (req) => {
         const paperTrading = params.paperTrading ?? true;
         const maxPosition = params.maxPosition || 250;
         const minSponsorPool = params.minSponsorPool ?? 0;
-        const minLiquidityDepth = params.minLiquidityDepth || 300;
-        const minVolume24h = params.minVolume24h || 10000;
+        const minLiquidityDepth = params.minLiquidityDepth || 200;
+        const minVolume24h = params.minVolume24h || 3000;
         const totalCapital = params.totalCapital || 1000;
         const useExternalOracle = params.useExternalOracle || false;
+        const aggressiveShortTerm = params.aggressiveShortTerm ?? true;
 
         const orders: any[] = [];
 
@@ -423,7 +478,7 @@ serve(async (req) => {
         }
 
         // ── 1. Fetch top 150 active markets from Gamma API ──
-        logs.push(`📊 Загрузка рынков (мин.объём: $${minVolume24h}, мин.глубина: $${minLiquidityDepth}, мин.спонсор: $${minSponsorPool})...`);
+        logs.push(`📊 Загрузка рынков (мин.объём: $${minVolume24h}, мин.глубина: $${minLiquidityDepth}, aggressive: ${aggressiveShortTerm ? "ON" : "OFF"})...`);
         let allMarkets: any[];
         try {
           allMarkets = await getMarkets(150);
@@ -446,7 +501,9 @@ serve(async (req) => {
 
         // ── 3. Enrich with orderbook depth + sponsor data ──
         const enriched: any[] = [];
-        let skipReasons = { lowVol: allMarkets.length - volumeFiltered.length, emptyBook: 0, badMid: 0, wideSpr: 0, lowDepth: 0, lowSponsor: 0 };
+        let skipReasons = { lowVol: allMarkets.length - volumeFiltered.length, emptyBook: 0, lowDepth: 0, lowSponsor: 0 };
+        let sponsorClobCount = 0;
+        let sponsorFallbackCount = 0;
 
         for (const m of marketsToEnrich) {
           let tokenIds = m.clobTokenIds;
@@ -457,10 +514,21 @@ serve(async (req) => {
           const tokenId = tokenIds[0];
 
           const conditionId = m.conditionId || m.id || "";
-          const gammaReward = parseFloat(m.rewardsDaily || m.rewardPoolSize || m.liquidityRewards || "0");
+          const gammaReward = parseFloat(m.rewardsDaily || m.rewardPoolSize || m.liquidityRewards || m.rewardsAmount || "0");
           let sponsorPool = gammaReward;
+          let sponsorMethod = gammaReward > 0 ? "gamma" : "none";
+
+          // Multi-method sponsor enrichment
           if (sponsorPool === 0 && conditionId) {
-            sponsorPool = await getSponsorPool(conditionId);
+            const result = await getSponsorPool(conditionId, tokenId);
+            sponsorPool = result.pool;
+            sponsorMethod = result.method;
+          }
+
+          if (sponsorMethod === "clob" || sponsorMethod === "clob_token" || sponsorMethod === "rewards_markets") {
+            sponsorClobCount++;
+          } else if (sponsorMethod === "gamma" && sponsorPool > 0) {
+            sponsorFallbackCount++;
           }
 
           const midResult = await getMidPrice(client, tokenId);
@@ -469,49 +537,46 @@ serve(async (req) => {
           const volume24h = parseFloat(m.volume24hr || m.volume || "0");
           const question = m.question || m.title || "";
 
-          // ── STRONG FILTERS ──
+          // ── SOFT FILTERS ──
 
-          // Filter: empty orderbook
+          // Hard-skip: completely empty orderbook
           if (mid === 0 || source === "empty") {
             skipReasons.emptyBook++;
             continue;
           }
 
-          // Filter: liquidity depth
-          if (liquidityDepth < minLiquidityDepth) {
+          // Hard-skip: depth below absolute minimum (80)
+          if (liquidityDepth < 80) {
             skipReasons.lowDepth++;
             continue;
           }
 
-          // Score penalty for mid=0.5 markets (balanced = lower priority, but don't skip)
-          const isCoinFlip = Math.abs(mid - 0.5) < 0.001;
-
-          // Filter: missing sides or spread > 10%
-          if (bestBid === 0 || bestAsk === 0 || source === "bid_only" || source === "ask_only") {
-            skipReasons.emptyBook++;
-            continue;
-          }
-          // Wide spread penalty (don't skip, just lower priority)
-          const bookSpread = (bestAsk - bestBid) / mid;
-          const wideSpreadPenalty = bookSpread > 0.10 ? -3000 : bookSpread > 0.05 ? -1000 : 0;
-
-          // Filter: sponsor pool minimum
+          // Filter: sponsor pool minimum (user-configurable)
           if (sponsorPool < minSponsorPool) {
             skipReasons.lowSponsor++;
             continue;
           }
 
-          // ── Category bonus ──
-          const { bonus: categoryBonus, category } = getCategoryBonus(question);
+          // Soft penalties (affect score, don't skip)
+          const isCoinFlip = Math.abs(mid - 0.5) < 0.005;
           const coinFlipPenalty = isCoinFlip ? -2000 : 0;
 
-          const score = scoreMarket(volume24h, sponsorPool, liquidityDepth, categoryBonus + coinFlipPenalty + wideSpreadPenalty);
+          const bookSpread = (bestBid > 0 && bestAsk > 0) ? (bestAsk - bestBid) / mid : 0;
+          const wideSpreadPenalty = bookSpread > 0.10 ? -3000 : bookSpread > 0.05 ? -1000 : 0;
+
+          const depthPenalty = liquidityDepth < minLiquidityDepth ? -1500 : 0;
+
+          // ── Category bonus (v4 radical) ──
+          const { bonus: categoryBonus, category } = getCategoryBonus(question, sponsorPool, aggressiveShortTerm);
+
+          const score = scoreMarket(volume24h, sponsorPool, liquidityDepth, categoryBonus + coinFlipPenalty + wideSpreadPenalty + depthPenalty);
 
           enriched.push({
             ...m,
             tokenId,
             conditionId,
             sponsorPool,
+            sponsorMethod,
             volume24h,
             liquidityDepth,
             mid,
@@ -535,19 +600,26 @@ serve(async (req) => {
         const sponsoredCount = selectedMarkets.filter(m => m.sponsorPool > 0).length;
         const cryptoCount = selectedMarkets.filter(m => m.category === "crypto/short-term").length;
         const macroCount = selectedMarkets.filter(m => m.category === "macro").length;
+        const sportsCount = selectedMarkets.filter(m => m.category === "sports").length;
+        const sponsoredCatCount = selectedMarkets.filter(m => m.category === "sponsored").length;
         const totalSponsor = selectedMarkets.reduce((s, m) => s + m.sponsorPool, 0);
         const avgSponsor = selectedMarkets.length > 0 ? totalSponsor / selectedMarkets.length : 0;
 
-        // Enhanced logging
-        logs.push(`📊 Загружено ${allMarkets.length} markets | После фильтров: ${enriched.length} качественных (${sponsoredCount} со спонсорами, ${cryptoCount} crypto/short-term, ${macroCount} macro) | Avg sponsor $${avgSponsor.toFixed(0)}`);
-        logs.push(`🔍 Отфильтровано: vol<${minVolume24h}=${skipReasons.lowVol}, пустой стакан=${skipReasons.emptyBook}, mid≈0.5=${skipReasons.badMid}, спред>30%=${skipReasons.wideSpr}, глубина<${minLiquidityDepth}=${skipReasons.lowDepth}, спонсор<${minSponsorPool}=${skipReasons.lowSponsor}`);
-        logs.push(`🎯 Выбрано ${selectedMarkets.length} рынков`);
+        // Enhanced cycle-start logging
+        logs.push(`🔍 Загружено ${allMarkets.length} | После фильтров ${enriched.length} | Выбрано ${selectedMarkets.length} (${sponsoredCount} со спонсорами, ${cryptoCount} short-term/crypto, ${macroCount} macro)`);
+        logs.push(`💰 Avg sponsor pool: $${avgSponsor.toFixed(0)} | Sponsor fetch: ${sponsorClobCount} via CLOB, ${sponsorFallbackCount} via Gamma`);
+        logs.push(`🏷️ Топ категории: crypto ${cryptoCount}, sponsored ${sponsoredCatCount}, sports ${sportsCount}, macro ${macroCount}`);
+        logs.push(`🔍 Отфильтровано: vol<${minVolume24h}=${skipReasons.lowVol}, пустой стакан=${skipReasons.emptyBook}, глубина<80=${skipReasons.lowDepth}, спонсор<${minSponsorPool}=${skipReasons.lowSponsor}`);
 
-        // Log full market list
-        for (const m of selectedMarkets) {
-          const name = (m.question || "Unknown").slice(0, 40);
+        // Log top markets
+        for (const m of selectedMarkets.slice(0, 10)) {
+          const name = (m.question || "Unknown").slice(0, 45);
           const catTag = m.category !== "other" ? ` [${m.category}]` : "";
-          logs.push(`  📋 ${name} | vol=$${m.volume24h.toFixed(0)} | spon=$${m.sponsorPool.toFixed(0)} | depth=$${m.liquidityDepth.toFixed(0)} | score=${m.score.toFixed(0)}${catTag}`);
+          const sponTag = m.sponsorPool > 0 ? ` 🏆$${m.sponsorPool.toFixed(0)}` : "";
+          logs.push(`  📋 ${name} | vol=$${m.volume24h.toFixed(0)} | depth=$${m.liquidityDepth.toFixed(0)} | score=${m.score.toFixed(0)}${catTag}${sponTag}`);
+        }
+        if (selectedMarkets.length > 10) {
+          logs.push(`  ... и ещё ${selectedMarkets.length - 10} рынков`);
         }
 
         // ── 5. Get current open orders (for selective update) ──
@@ -583,17 +655,17 @@ serve(async (req) => {
           // Dynamic spread
           let { finalBp: dynamicBp, sponsorAdj, volAdj } = calcDynamicSpread(baseBp, market.sponsorPool || 0, range1h);
 
-          // ── NEAR-CERTAIN MARKET HANDLING ──
+          // ── NEAR-CERTAIN MARKET HANDLING (mid >0.92 or <0.08) ──
           let nearCertainLabel = "";
           let onlyBuy = false;
           let onlySell = false;
-          if (midPrice > 0.95) {
+          if (midPrice > 0.92) {
             dynamicBp = Math.min(dynamicBp, 8);
-            onlyBuy = true; // prefer heavy side
+            onlyBuy = true;
             nearCertainLabel = " [NEAR-YES]";
-          } else if (midPrice < 0.05) {
+          } else if (midPrice < 0.08) {
             dynamicBp = Math.min(dynamicBp, 8);
-            onlySell = true; // prefer heavy side
+            onlySell = true;
             nearCertainLabel = " [NEAR-NO]";
           }
 

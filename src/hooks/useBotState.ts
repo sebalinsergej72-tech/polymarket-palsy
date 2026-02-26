@@ -20,6 +20,7 @@ export interface BotConfig {
   minVolume24h: number;
   totalCapital: number;
   useExternalOracle: boolean;
+  aggressiveShortTerm: boolean;
 }
 
 const DEFAULT_CONFIG: BotConfig = {
@@ -30,10 +31,11 @@ const DEFAULT_CONFIG: BotConfig = {
   paperTrading: true,
   maxPosition: 250,
   minSponsorPool: 0,
-  minLiquidityDepth: 300,
-  minVolume24h: 10000,
+  minLiquidityDepth: 200,
+  minVolume24h: 3000,
   totalCapital: 1000,
   useExternalOracle: false,
+  aggressiveShortTerm: true,
 };
 
 const MAX_LOGS = 200;
@@ -97,6 +99,7 @@ export function useBotState() {
         minVolume24h: config.minVolume24h,
         totalCapital: config.totalCapital,
         useExternalOracle: config.useExternalOracle,
+        aggressiveShortTerm: config.aggressiveShortTerm,
       });
 
       if (data.circuitBreaker) {
