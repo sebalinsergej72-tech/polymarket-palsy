@@ -5,6 +5,7 @@ import ActionButtons from "@/components/bot/ActionButtons";
 import LogPanel from "@/components/bot/LogPanel";
 import { Activity, Zap, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 
 const Index = () => {
   const { isRunning, isConnected, config, logs, startBot, stopBot, clearLogs, updateConfig, connectBot } = useBotState();
@@ -31,6 +32,23 @@ const Index = () => {
             </div>
 
             <ControlPanel config={config} onUpdate={updateConfig} disabled={isRunning} />
+
+            {/* Paper / Live toggle */}
+            <div className="flex items-center justify-between rounded-md border border-border bg-muted/50 p-3">
+              <div className="space-y-0.5">
+                <span className="text-sm font-semibold text-foreground">
+                  {config.paperTrading ? "📝 Paper Trading" : "💰 Live Trading"}
+                </span>
+                <p className="font-mono text-xs text-muted-foreground">
+                  {config.paperTrading ? "Ордера НЕ отправляются" : "⚠️ Реальные ордера!"}
+                </p>
+              </div>
+              <Switch
+                checked={!config.paperTrading}
+                onCheckedChange={(live) => updateConfig({ paperTrading: !live })}
+                disabled={isRunning}
+              />
+            </div>
 
             {/* Connection status */}
             <Button
