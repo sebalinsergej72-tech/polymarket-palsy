@@ -15,6 +15,8 @@ const GAMMA_API = "https://gamma-api.polymarket.com";
 
 let cachedCreds: { apiKey: string; secret: string; passphrase: string } | null = null;
 let cachedClient: any = null;
+// Force re-creation on deploy by bumping version
+const CLIENT_VERSION = "v2-proxy";
 
 // ─── Supabase Admin Client ───
 function getSupabase() {
@@ -24,17 +26,34 @@ function getSupabase() {
   );
 }
 
-// ─── Trading Client ───
+// ─── Trading Client (Proxy Wallet / GNOSIS_SAFE signature_type=2) ───
+const SIGNATURE_TYPE = 2; // GNOSIS_SAFE / Browser Wallet Proxy
+const FUNDER = "0x787328dc79BA60aF2c61De7773A536e2d4c504E1";
+
 async function getTradingClient() {
   const privateKey = Deno.env.get("POLYMARKET_PRIVATE_KEY");
   if (!privateKey) throw new Error("POLYMARKET_PRIVATE_KEY not set");
   if (cachedClient) return cachedClient;
 
   const signer = new Wallet(privateKey);
+  console.log("🔑 Деривация API credentials... signer:", signer.address, "funder:", FUNDER);
+
+  // Step 1: temp client to derive API creds
   const tempClient = new ClobClient(CLOB_HOST, CHAIN_ID, signer);
   const creds = await tempClient.createOrDeriveApiKey();
   cachedCreds = creds;
-  cachedClient = new ClobClient(CLOB_HOST, CHAIN_ID, signer, creds);
+  console.log("✅ API creds получены:", JSON.stringify({ apiKey: creds.apiKey?.slice(0, 12) + "..." }));
+
+  // Step 2: main client with signature_type=2 (proxy wallet) and funder
+  cachedClient = new ClobClient(
+    CLOB_HOST,
+    CHAIN_ID,
+    signer,
+    creds,
+    SIGNATURE_TYPE,
+    FUNDER
+  );
+  console.log("✅ ClobClient создан с signature_type=2, funder=", FUNDER);
   return cachedClient;
 }
 
@@ -485,6 +504,18 @@ serve(async (req) => {
 
         logs.push(`🔄 РЕЖИМ: ${paperTrading ? '📝 PAPER' : '💰 LIVE TRADING'}`);
 
+        // Balance check for live mode
+        if (!paperTrading) {
+          try {
+            const balanceInfo = await client.getBalance?.();
+            if (balanceInfo !== undefined) {
+              logs.push(`💰 Баланс USDC внутри Polymarket: ${typeof balanceInfo === 'object' ? JSON.stringify(balanceInfo) : balanceInfo}`);
+            }
+          } catch (e) {
+            logs.push(`⚠️ Не удалось получить баланс: ${e.message}`);
+          }
+        }
+
         if (!paperTrading && totalCapital < 150) {
           logs.push("⚠️ ВНИМАНИЕ: LIVE торговля с маленьким капиталом $" + totalCapital + " — возможны редкие филлы и маленькая прибыль");
         }
@@ -821,15 +852,18 @@ serve(async (req) => {
                   }
                 }
                 try {
+                  console.log(`🚀 Отправляем реальный BUY ордер: token=${tokenId}, price=${safeBuyPrice}, size=${skew.buySize}`);
                   const buyOrder = await client.createAndPostOrder(
                     { tokenID: tokenId, price: safeBuyPrice, size: skew.buySize, side: "BUY" },
                     { tickSize: "0.01", negRisk },
                     "GTC"
                   );
+                  console.log("✅ BUY ордер принят Polymarket:", JSON.stringify(buyOrder));
                   logs.push(`  ✅ BUY @ ${safeBuyPrice.toFixed(4)} (${skew.buySize} USDC)`);
                   orders.push(buyOrder);
                   await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "BUY", price: safeBuyPrice, size: skew.buySize, paper: false });
                 } catch (e) {
+                  console.error("❌ BUY ордер отклонён:", e.message);
                   logs.push(`  ❌ BUY failed: ${e.message}`);
                 }
               }
@@ -859,15 +893,18 @@ serve(async (req) => {
                   }
                 }
                 try {
+                  console.log(`🚀 Отправляем реальный SELL ордер: token=${tokenId}, price=${safeSellPrice}, size=${skew.sellSize}`);
                   const sellOrder = await client.createAndPostOrder(
                     { tokenID: tokenId, price: safeSellPrice, size: skew.sellSize, side: "SELL" },
                     { tickSize: "0.01", negRisk },
                     "GTC"
                   );
+                  console.log("✅ SELL ордер принят Polymarket:", JSON.stringify(sellOrder));
                   logs.push(`  ✅ SELL @ ${safeSellPrice.toFixed(4)} (${skew.sellSize} USDC)`);
                   orders.push(sellOrder);
                   await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "SELL", price: safeSellPrice, size: skew.sellSize, paper: false });
                 } catch (e) {
+                  console.error("❌ SELL ордер отклонён:", e.message);
                   logs.push(`  ❌ SELL failed: ${e.message}`);
                 }
               }
