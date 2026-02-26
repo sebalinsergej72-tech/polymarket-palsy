@@ -3,6 +3,7 @@ import StatusIndicator from "@/components/bot/StatusIndicator";
 import ControlPanel from "@/components/bot/ControlPanel";
 import ActionButtons from "@/components/bot/ActionButtons";
 import LogPanel from "@/components/bot/LogPanel";
+import StatsPanel from "@/components/bot/StatsPanel";
 import { Activity, Zap, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -77,6 +78,8 @@ const Index = () => {
                 <span className="font-mono text-xs">{logs.length} записей в логе</span>
               </div>
             </div>
+
+            <StatsPanel isConnected={isConnected} isRunning={isRunning} />
 
             <ActionButtons isRunning={isRunning} onStart={startBot} onStop={stopBot} />
 
