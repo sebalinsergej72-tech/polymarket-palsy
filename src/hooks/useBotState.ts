@@ -17,6 +17,7 @@ export interface BotConfig {
   maxPosition: number;
   minSponsorPool: number;
   minLiquidityDepth: number;
+  minVolume24h: number;
   totalCapital: number;
   useExternalOracle: boolean;
 }
@@ -30,6 +31,7 @@ const DEFAULT_CONFIG: BotConfig = {
   maxPosition: 250,
   minSponsorPool: 0,
   minLiquidityDepth: 300,
+  minVolume24h: 10000,
   totalCapital: 1000,
   useExternalOracle: false,
 };
@@ -92,6 +94,7 @@ export function useBotState() {
         maxPosition: config.maxPosition,
         minSponsorPool: config.minSponsorPool,
         minLiquidityDepth: config.minLiquidityDepth,
+        minVolume24h: config.minVolume24h,
         totalCapital: config.totalCapital,
         useExternalOracle: config.useExternalOracle,
       });
