@@ -9,15 +9,15 @@ interface ControlPanelProps {
 }
 
 const sliders = [
-  { key: "orderSize" as const, label: "💰 Размер ордера (USDC)", min: 1, max: 500, step: 1, unit: "USDC" },
+  { key: "orderSize" as const, label: "💰 Размер ордера (USDC)", min: 1, max: 20, step: 1, unit: "USDC" },
   { key: "spread" as const, label: "📐 Спред (basis points)", min: 5, max: 60, step: 1, unit: "bp" },
   { key: "interval" as const, label: "⏱️ Интервал обновления", min: 5, max: 30, step: 1, unit: "сек" },
   { key: "maxMarkets" as const, label: "📊 Макс. рынков", min: 1, max: 125, step: 1, unit: "" },
-  { key: "maxPosition" as const, label: "🛡️ Макс. позиция / рынок", min: 100, max: 1000, step: 10, unit: "USDC" },
+  { key: "maxPosition" as const, label: "🛡️ Макс. позиция / рынок", min: 1, max: 100, step: 1, unit: "USDC" },
   { key: "minVolume24h" as const, label: "📈 Мин. 24ч объём", min: 100, max: 50000, step: 100, unit: "USDC" },
   { key: "minSponsorPool" as const, label: "🏆 Мин. спонсорский пул", min: 0, max: 2000, step: 50, unit: "$" },
   { key: "minLiquidityDepth" as const, label: "💧 Мин. глубина ликвидности", min: 20, max: 2000, step: 10, unit: "$" },
-  { key: "totalCapital" as const, label: "💼 Общий капитал", min: 100, max: 10000, step: 100, unit: "USDC" },
+  { key: "totalCapital" as const, label: "💼 Общий капитал", min: 50, max: 10000, step: 10, unit: "USDC" },
 ];
 
 const ControlPanel = ({ config, onUpdate, disabled }: ControlPanelProps) => {
@@ -43,6 +43,11 @@ const ControlPanel = ({ config, onUpdate, disabled }: ControlPanelProps) => {
             disabled={disabled}
             className="cursor-pointer"
           />
+          {c.key === "totalCapital" && config.totalCapital < 300 && (
+            <p className="text-[10px] font-semibold text-destructive leading-tight">
+              ⚠️ При капитале ниже $300–500 прибыль будет очень маленькой. Рекомендуется сначала тестить в Paper-режиме.
+            </p>
+          )}
         </div>
       ))}
 
