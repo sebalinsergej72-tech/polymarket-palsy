@@ -14,10 +14,118 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      bot_daily_pnl: {
+        Row: {
+          circuit_breaker_triggered: boolean | null
+          created_at: string | null
+          date: string
+          id: string
+          realized_pnl: number | null
+          total_capital: number | null
+          trade_count: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          circuit_breaker_triggered?: boolean | null
+          created_at?: string | null
+          date?: string
+          id?: string
+          realized_pnl?: number | null
+          total_capital?: number | null
+          trade_count?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          circuit_breaker_triggered?: boolean | null
+          created_at?: string | null
+          date?: string
+          id?: string
+          realized_pnl?: number | null
+          total_capital?: number | null
+          trade_count?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      bot_positions: {
+        Row: {
+          id: string
+          market_id: string
+          market_name: string | null
+          net_position: number | null
+          token_id: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          market_id: string
+          market_name?: string | null
+          net_position?: number | null
+          token_id?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          market_id?: string
+          market_name?: string | null
+          net_position?: number | null
+          token_id?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      bot_trade_log: {
+        Row: {
+          action: string
+          id: string
+          market_id: string | null
+          market_name: string | null
+          notes: string | null
+          paper: boolean | null
+          price: number | null
+          side: string | null
+          size: number | null
+          timestamp: string | null
+        }
+        Insert: {
+          action: string
+          id?: string
+          market_id?: string | null
+          market_name?: string | null
+          notes?: string | null
+          paper?: boolean | null
+          price?: number | null
+          side?: string | null
+          size?: number | null
+          timestamp?: string | null
+        }
+        Update: {
+          action?: string
+          id?: string
+          market_id?: string | null
+          market_name?: string | null
+          notes?: string | null
+          paper?: boolean | null
+          price?: number | null
+          side?: string | null
+          size?: number | null
+          timestamp?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
-      [_ in never]: never
+      bot_cumulative_pnl: {
+        Row: {
+          circuit_breaker_triggered: boolean | null
+          cumulative_pnl: number | null
+          date: string | null
+          realized_pnl: number | null
+          total_capital: number | null
+          trade_count: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       [_ in never]: never
