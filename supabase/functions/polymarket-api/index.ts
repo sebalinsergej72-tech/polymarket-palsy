@@ -59,8 +59,9 @@ serve(async (req) => {
 
       case "derive_creds": {
         const client = await getTradingClient();
+        const apiKey = cachedCreds?.apiKey || cachedCreds?.key || JSON.stringify(Object.keys(cachedCreds || {}));
         return new Response(
-          JSON.stringify({ ok: true, address: cachedCreds?.apiKey?.slice(0, 8) + "..." }),
+          JSON.stringify({ ok: true, address: String(apiKey).slice(0, 12) + "..." }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -95,6 +96,11 @@ serve(async (req) => {
         // Full market-making cycle
         const client = await getTradingClient();
         const logs: string[] = [];
+        const maxMarkets = params.maxMarkets || 5;
+        const spread = params.spread || 15;
+        const orderSize = params.orderSize || 50;
+        const paperTrading = params.paperTrading ?? true;
+        const orders: any[] = [];
 
         // 1. Cancel existing orders (skip in paper mode)
         if (!paperTrading) {
@@ -110,14 +116,8 @@ serve(async (req) => {
         }
 
         // 2. Fetch top markets
-        const maxMarkets = params.maxMarkets || 5;
         logs.push(`📊 Загрузка топ-${maxMarkets} рынков...`);
         const markets = await getMarkets(maxMarkets);
-
-        const spread = params.spread || 15;
-        const orderSize = params.orderSize || 50;
-        const paperTrading = params.paperTrading ?? true;
-        const orders: any[] = [];
 
         // 3. Place orders on each market
         for (const market of markets.slice(0, maxMarkets)) {
