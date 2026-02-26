@@ -710,11 +710,11 @@ serve(async (req) => {
           let onlyBuy = false;
           let onlySell = false;
           if (midPrice > 0.92) {
-            dynamicBp = Math.min(dynamicBp, 8);
+            dynamicBp = Math.min(dynamicBp, 5);
             onlyBuy = true;
             nearCertainLabel = " [NEAR-YES]";
           } else if (midPrice < 0.08) {
-            dynamicBp = Math.min(dynamicBp, 8);
+            dynamicBp = Math.min(dynamicBp, 5);
             onlySell = true;
             nearCertainLabel = " [NEAR-NO]";
           }
@@ -793,6 +793,11 @@ serve(async (req) => {
             }
           } else {
             // ── LIVE mode: Selective Order Update ──
+            let safeBuyPrice = Math.max(0.01, Math.min(0.99, Math.round(skew.buyPrice * 10000) / 10000));
+            let safeSellPrice = Math.max(0.01, Math.min(0.99, Math.round(skew.sellPrice * 10000) / 10000));
+            if (safeBuyPrice === 1 || safeBuyPrice === 0) safeBuyPrice = 0.99;
+            if (safeSellPrice === 1 || safeSellPrice === 0) safeSellPrice = 0.01;
+
             const myBuys = existingOrders.filter(
               (o: any) => o.asset_id === tokenId && (o.side === "BUY" || o.side === "buy")
             );
@@ -803,7 +808,7 @@ serve(async (req) => {
             // ── BUY side ──
             if (!skew.pauseBuy) {
               const existingBuy = myBuys[0];
-              if (existingBuy && isWithinTolerance(parseFloat(existingBuy.price), skew.buyPrice)) {
+              if (existingBuy && isWithinTolerance(parseFloat(existingBuy.price), safeBuyPrice)) {
                 logs.push(`  ♻️ BUY @ ${parseFloat(existingBuy.price).toFixed(4)} kept`);
               } else {
                 if (existingBuy) {
@@ -817,13 +822,13 @@ serve(async (req) => {
                 }
                 try {
                   const buyOrder = await client.createAndPostOrder(
-                    { tokenID: tokenId, price: parseFloat(skew.buyPrice.toFixed(2)), size: skew.buySize, side: "BUY" },
+                    { tokenID: tokenId, price: safeBuyPrice, size: skew.buySize, side: "BUY" },
                     { tickSize: "0.01", negRisk },
                     "GTC"
                   );
-                  logs.push(`  ✅ BUY @ ${skew.buyPrice.toFixed(4)} (${skew.buySize} USDC)`);
+                  logs.push(`  ✅ BUY @ ${safeBuyPrice.toFixed(4)} (${skew.buySize} USDC)`);
                   orders.push(buyOrder);
-                  await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "BUY", price: skew.buyPrice, size: skew.buySize, paper: false });
+                  await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "BUY", price: safeBuyPrice, size: skew.buySize, paper: false });
                 } catch (e) {
                   logs.push(`  ❌ BUY failed: ${e.message}`);
                 }
@@ -841,7 +846,7 @@ serve(async (req) => {
             // ── SELL side ──
             if (!skew.pauseSell) {
               const existingSell = mySells[0];
-              if (existingSell && isWithinTolerance(parseFloat(existingSell.price), skew.sellPrice)) {
+              if (existingSell && isWithinTolerance(parseFloat(existingSell.price), safeSellPrice)) {
                 logs.push(`  ♻️ SELL @ ${parseFloat(existingSell.price).toFixed(4)} kept`);
               } else {
                 if (existingSell) {
@@ -855,13 +860,13 @@ serve(async (req) => {
                 }
                 try {
                   const sellOrder = await client.createAndPostOrder(
-                    { tokenID: tokenId, price: parseFloat(skew.sellPrice.toFixed(2)), size: skew.sellSize, side: "SELL" },
+                    { tokenID: tokenId, price: safeSellPrice, size: skew.sellSize, side: "SELL" },
                     { tickSize: "0.01", negRisk },
                     "GTC"
                   );
-                  logs.push(`  ✅ SELL @ ${skew.sellPrice.toFixed(4)} (${skew.sellSize} USDC)`);
+                  logs.push(`  ✅ SELL @ ${safeSellPrice.toFixed(4)} (${skew.sellSize} USDC)`);
                   orders.push(sellOrder);
-                  await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "SELL", price: skew.sellPrice, size: skew.sellSize, paper: false });
+                  await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "SELL", price: safeSellPrice, size: skew.sellSize, paper: false });
                 } catch (e) {
                   logs.push(`  ❌ SELL failed: ${e.message}`);
                 }
