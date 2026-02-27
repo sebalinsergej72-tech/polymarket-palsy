@@ -65,13 +65,21 @@ function getRuntimeIdentity() {
 
 function compactOrder(order: any) {
   return {
-    id: order?.id || null,
-    asset_id: order?.asset_id || order?.token_id || null,
+    id: order?.id || order?.orderID || order?.orderId || null,
+    asset_id: order?.asset_id || order?.assetId || order?.tokenID || order?.tokenId || null,
     side: order?.side || null,
     price: order?.price || null,
     size: order?.original_size || order?.size || null,
-    status: order?.status || null,
+    status: order?.status || order?.state || null,
   };
+}
+
+function toAuditNote(event: string, payload: Record<string, unknown>) {
+  return JSON.stringify({
+    event,
+    ts: new Date().toISOString(),
+    ...payload,
+  });
 }
 
 async function getTradingClient() {
@@ -463,6 +471,38 @@ serve(async (req) => {
         const apiKey = cachedCreds?.apiKey || cachedCreds?.key || "unknown";
         return new Response(
           JSON.stringify({ ok: true, address: String(apiKey).slice(0, 12) + "..." }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      case "order_audit": {
+        const client = await getTradingClient();
+        const sb = getSupabase();
+        const limit = Math.max(1, Math.min(Number(params.limit || 50), 200));
+        const response: Record<string, unknown> = {
+          ok: true,
+          serverTime: new Date().toISOString(),
+          clob: { openOrdersCount: 0, openOrdersSample: [] },
+          db: { recentLiveEvents: [] },
+        };
+        try {
+          const openOrders = await client.getOpenOrders();
+          response.clob = {
+            openOrdersCount: openOrders?.length || 0,
+            openOrdersSample: (openOrders || []).slice(0, 30).map(compactOrder),
+          };
+        } catch (e) { response.clob = { error: getErrorMessage(e) }; }
+        try {
+          const { data } = await sb
+            .from("bot_trade_log")
+            .select("timestamp,market_name,market_id,action,side,price,size,paper,notes")
+            .eq("paper", false)
+            .order("timestamp", { ascending: false })
+            .limit(limit);
+          response.db = { recentLiveEvents: data || [] };
+        } catch (e) { response.db = { error: getErrorMessage(e) }; }
+        return new Response(
+          JSON.stringify(response),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -968,7 +1008,11 @@ serve(async (req) => {
                   try {
                     await client.cancelOrder(existingBuy.id);
                     logs.push(`  🗑️ Cancel BUY @ ${parseFloat(existingBuy.price).toFixed(4)}`);
-                    await logTrade(sb, { market_name: marketName, market_id: marketId, action: "cancel", side: "BUY", price: parseFloat(existingBuy.price), size: parseFloat(existingBuy.original_size || existingBuy.size || "0"), paper: false });
+                    await logTrade(sb, {
+                      market_name: marketName, market_id: marketId, action: "cancel", side: "BUY",
+                      price: parseFloat(existingBuy.price), size: parseFloat(existingBuy.original_size || existingBuy.size || "0"),
+                      paper: false, notes: toAuditNote("cancel", { orderId: existingBuy.id || null, reason: "replace_buy" }),
+                    });
                   } catch (e) {
                     logs.push(`  ⚠️ Cancel BUY err: ${getErrorMessage(e)}`);
                   }
@@ -985,11 +1029,24 @@ serve(async (req) => {
                   console.log(`✅ BUY ордер принят Polymarket (${latency}ms):`, JSON.stringify(buyOrder));
                   logs.push(`  ✅ BUY @ ${safeBuyPrice.toFixed(4)} (${skew.buySize} USDC) latency=${latency}ms`);
                   orders.push(buyOrder);
-                  await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "BUY", price: safeBuyPrice, size: skew.buySize, paper: false });
+                  await logTrade(sb, {
+                    market_name: marketName, market_id: marketId, action: "place", side: "BUY",
+                    price: safeBuyPrice, size: skew.buySize, paper: false,
+                    notes: toAuditNote("place", {
+                      orderId: buyOrder?.id || buyOrder?.orderID || buyOrder?.orderId || null,
+                      status: buyOrder?.status || buyOrder?.state || null,
+                      tickSize: tickSizeStr, latencyMs: latency,
+                    }),
+                  });
                 } catch (e) {
                   const errMsg = getErrorMessage(e);
                   console.error(`❌ BUY ордер отклонён: ${errMsg}`);
                   logs.push(`  ❌ BUY failed: ${errMsg}`);
+                  logTrade(sb, {
+                    market_name: marketName, market_id: marketId, action: "error", side: "BUY",
+                    price: safeBuyPrice, size: skew.buySize, paper: false,
+                    notes: toAuditNote("place_error", { tickSize: tickSizeStr, error: errMsg }),
+                  }).catch(() => {});
                 }
               }
               for (const extra of myBuys.slice(1)) {
@@ -1012,7 +1069,11 @@ serve(async (req) => {
                   try {
                     await client.cancelOrder(existingSell.id);
                     logs.push(`  🗑️ Cancel SELL @ ${parseFloat(existingSell.price).toFixed(4)}`);
-                    await logTrade(sb, { market_name: marketName, market_id: marketId, action: "cancel", side: "SELL", price: parseFloat(existingSell.price), size: parseFloat(existingSell.original_size || existingSell.size || "0"), paper: false });
+                    await logTrade(sb, {
+                      market_name: marketName, market_id: marketId, action: "cancel", side: "SELL",
+                      price: parseFloat(existingSell.price), size: parseFloat(existingSell.original_size || existingSell.size || "0"),
+                      paper: false, notes: toAuditNote("cancel", { orderId: existingSell.id || null, reason: "replace_sell" }),
+                    });
                   } catch (e) {
                     logs.push(`  ⚠️ Cancel SELL err: ${getErrorMessage(e)}`);
                   }
@@ -1029,11 +1090,24 @@ serve(async (req) => {
                   console.log(`✅ SELL ордер принят Polymarket (${latency}ms):`, JSON.stringify(sellOrder));
                   logs.push(`  ✅ SELL @ ${safeSellPrice.toFixed(4)} (${skew.sellSize} USDC) latency=${latency}ms`);
                   orders.push(sellOrder);
-                  await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "SELL", price: safeSellPrice, size: skew.sellSize, paper: false });
+                  await logTrade(sb, {
+                    market_name: marketName, market_id: marketId, action: "place", side: "SELL",
+                    price: safeSellPrice, size: skew.sellSize, paper: false,
+                    notes: toAuditNote("place", {
+                      orderId: sellOrder?.id || sellOrder?.orderID || sellOrder?.orderId || null,
+                      status: sellOrder?.status || sellOrder?.state || null,
+                      tickSize: tickSizeStr, latencyMs: latency,
+                    }),
+                  });
                 } catch (e) {
                   const errMsg = getErrorMessage(e);
                   console.error(`❌ SELL ордер отклонён: ${errMsg}`);
                   logs.push(`  ❌ SELL failed: ${errMsg}`);
+                  logTrade(sb, {
+                    market_name: marketName, market_id: marketId, action: "error", side: "SELL",
+                    price: safeSellPrice, size: skew.sellSize, paper: false,
+                    notes: toAuditNote("place_error", { tickSize: tickSizeStr, error: errMsg }),
+                  }).catch(() => {});
                 }
               }
               for (const extra of mySells.slice(1)) {
