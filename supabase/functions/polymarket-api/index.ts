@@ -15,8 +15,14 @@ const GAMMA_API = "https://gamma-api.polymarket.com";
 
 let cachedCreds: { apiKey: string; secret: string; passphrase: string } | null = null;
 let cachedClient: any = null;
-// Force re-creation on deploy by bumping version
-const CLIENT_VERSION = "v2-proxy";
+const CLIENT_VERSION = "v3-ticksize-geoblock";
+
+// ─── Helper: normalize error messages ───
+function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e); } catch { return String(e); }
+}
 
 // ─── Supabase Admin Client ───
 function getSupabase() {
@@ -26,9 +32,19 @@ function getSupabase() {
   );
 }
 
-// ─── Trading Client (Proxy Wallet / GNOSIS_SAFE signature_type=2) ───
-const SIGNATURE_TYPE = 2; // GNOSIS_SAFE / Browser Wallet Proxy
-const FUNDER = "0x787328dc79BA60aF2c61De7773A536e2d4c504E1";
+// ─── Trading Client (env-driven signatureType & funder) ───
+function getSignatureType(): number {
+  const raw = Deno.env.get("POLYMARKET_SIGNATURE_TYPE");
+  if (raw) {
+    const parsed = parseInt(raw, 10);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return 1; // default EOA
+}
+
+function getFunder(): string | undefined {
+  return Deno.env.get("POLYMARKET_FUNDER") || undefined;
+}
 
 async function getTradingClient() {
   const privateKey = Deno.env.get("POLYMARKET_PRIVATE_KEY");
@@ -36,25 +52,46 @@ async function getTradingClient() {
   if (cachedClient) return cachedClient;
 
   const signer = new Wallet(privateKey);
-  console.log("🔑 Деривация API credentials... signer:", signer.address, "funder:", FUNDER);
+  const signatureType = getSignatureType();
+  const funder = getFunder();
+
+  console.log(`🔑 Деривация API credentials... signer: ${signer.address}, signatureType: ${signatureType}, funder: ${funder || "none (EOA)"}`);
 
   // Step 1: temp client to derive API creds
   const tempClient = new ClobClient(CLOB_HOST, CHAIN_ID, signer);
   const creds = await tempClient.createOrDeriveApiKey();
   cachedCreds = creds;
-  console.log("✅ API creds получены:", JSON.stringify({ apiKey: creds.apiKey?.slice(0, 12) + "..." }));
+  console.log("✅ API creds получены:", JSON.stringify({ apiKey: (creds.apiKey || creds.key || "unknown").slice(0, 12) + "..." }));
 
-  // Step 2: main client with signature_type=2 (proxy wallet) and funder
+  // Step 2: main client with signatureType and funder from env
   cachedClient = new ClobClient(
     CLOB_HOST,
     CHAIN_ID,
     signer,
     creds,
-    SIGNATURE_TYPE,
-    FUNDER
+    signatureType,
+    funder
   );
-  console.log("✅ ClobClient создан с signature_type=2, funder=", FUNDER);
+  console.log(`✅ ClobClient создан с signature_type=${signatureType}, funder=${funder || "none"}`);
   return cachedClient;
+}
+
+// ─── Tick size helpers ───
+function getTickSize(book: any): number {
+  const raw = book?.tick_size || book?.tickSize || book?.market?.tick_size || book?.market?.tickSize;
+  if (raw) {
+    const parsed = parseFloat(String(raw));
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+  return 0.01; // fallback
+}
+
+function floorToTick(price: number, tick: number): number {
+  return Math.floor(price / tick) * tick;
+}
+
+function ceilToTick(price: number, tick: number): number {
+  return Math.ceil(price / tick) * tick;
 }
 
 // ─── Gamma API: Fetch top active markets ───
@@ -78,11 +115,13 @@ interface MidResult {
   askDepth: number;
   bestBid: number;
   bestAsk: number;
+  tickSize: number;
 }
 
 async function getMidPrice(client: any, tokenId: string): Promise<MidResult> {
   try {
     const book = await client.getOrderBook(tokenId);
+    const tick = getTickSize(book);
     const hasBids = book?.bids?.length > 0;
     const hasAsks = book?.asks?.length > 0;
 
@@ -92,19 +131,19 @@ async function getMidPrice(client: any, tokenId: string): Promise<MidResult> {
       const bestBidSize = parseFloat(book.bids[0].size || "0");
       const bestAskSize = parseFloat(book.asks[0].size || "0");
       const range1h = (bestAsk - bestBid) / ((bestBid + bestAsk) / 2) * 100;
-      return { mid: (bestBid + bestAsk) / 2, source: "orderbook", range1h, bidDepth: bestBidSize, askDepth: bestAskSize, bestBid, bestAsk };
+      return { mid: (bestBid + bestAsk) / 2, source: "orderbook", range1h, bidDepth: bestBidSize, askDepth: bestAskSize, bestBid, bestAsk, tickSize: tick };
     }
 
     if (book?.market?.lastTradePrice) {
-      return { mid: parseFloat(book.market.lastTradePrice), source: "last_trade", range1h: 0, bidDepth: 0, askDepth: 0, bestBid: 0, bestAsk: 0 };
+      return { mid: parseFloat(book.market.lastTradePrice), source: "last_trade", range1h: 0, bidDepth: 0, askDepth: 0, bestBid: 0, bestAsk: 0, tickSize: tick };
     }
 
-    if (hasBids) return { mid: parseFloat(book.bids[0].price), source: "bid_only", range1h: 0, bidDepth: parseFloat(book.bids[0].size || "0"), askDepth: 0, bestBid: parseFloat(book.bids[0].price), bestAsk: 0 };
-    if (hasAsks) return { mid: parseFloat(book.asks[0].price), source: "ask_only", range1h: 0, bidDepth: 0, askDepth: parseFloat(book.asks[0].size || "0"), bestBid: 0, bestAsk: parseFloat(book.asks[0].price) };
+    if (hasBids) return { mid: parseFloat(book.bids[0].price), source: "bid_only", range1h: 0, bidDepth: parseFloat(book.bids[0].size || "0"), askDepth: 0, bestBid: parseFloat(book.bids[0].price), bestAsk: 0, tickSize: tick };
+    if (hasAsks) return { mid: parseFloat(book.asks[0].price), source: "ask_only", range1h: 0, bidDepth: 0, askDepth: parseFloat(book.asks[0].size || "0"), bestBid: 0, bestAsk: parseFloat(book.asks[0].price), tickSize: tick };
   } catch {
     // silent
   }
-  return { mid: 0, source: "empty", range1h: 0, bidDepth: 0, askDepth: 0, bestBid: 0, bestAsk: 0 };
+  return { mid: 0, source: "empty", range1h: 0, bidDepth: 0, askDepth: 0, bestBid: 0, bestAsk: 0, tickSize: 0.01 };
 }
 
 // ─── Fetch external oracle price for crypto markets ───
@@ -212,7 +251,6 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
   let category = "other";
   let isTier1 = false;
 
-  // Tier 1: +35000 — absolute priority markets
   for (const kw of TIER1_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
       bonus += aggressiveShortTerm ? 35000 : 17500;
@@ -222,7 +260,6 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
     }
   }
 
-  // Tier 2: +18000 — crypto/macro/sports
   if (!isTier1) {
     for (const kw of TIER2_KEYWORDS) {
       if (upper.includes(kw.toUpperCase())) {
@@ -239,13 +276,11 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
     }
   }
 
-  // Sponsor bonus: +8000 if sponsor_pool > 0
   if (sponsorPool > 0) {
     bonus += 8000;
     if (category === "other") category = "sponsored";
   }
 
-  // Negative keywords: -15000
   for (const kw of NEGATIVE_KEYWORDS) {
     if (upper.includes(kw.toUpperCase())) {
       bonus -= 15000;
@@ -257,16 +292,13 @@ function getCategoryBonus(title: string, sponsorPool: number, aggressiveShortTer
   return { bonus, category, isTier1 };
 }
 
-// ─── New scoring formula v7 (absolute final) ───
-// Cap volume and depth contributions so category bonuses actually dominate
 function scoreMarket(volume24h: number, sponsorPool: number, liquidityDepth: number, categoryBonus: number, isTier1: boolean): number {
-  const cappedVol = Math.min(volume24h, 500000); // cap at 500K so max vol contrib = 15K
-  const cappedDepth = Math.min(liquidityDepth, 50000); // cap at 50K so max depth contrib = 40K
+  const cappedVol = Math.min(volume24h, 500000);
+  const cappedDepth = Math.min(liquidityDepth, 50000);
   const base = (cappedVol * 0.03) + (sponsorPool * 30) + (cappedDepth * 0.8) + categoryBonus;
   return isTier1 ? base * 4.0 : base;
 }
 
-// ─── Dynamic spread calculation ───
 function calcDynamicSpread(baseBp: number, sponsorPool: number, range1h: number): { finalBp: number; sponsorAdj: string; volAdj: string } {
   let spread = baseBp;
   let sponsorAdj = "";
@@ -283,7 +315,6 @@ function calcDynamicSpread(baseBp: number, sponsorPool: number, range1h: number)
   return { finalBp, sponsorAdj, volAdj };
 }
 
-// ─── Skew adjustment ───
 function applySkew(
   buyPrice: number, sellPrice: number, orderSize: number,
   netPos: number, maxPos: number, baseBp: number
@@ -375,6 +406,22 @@ serve(async (req) => {
     const { action, ...params } = await req.json();
 
     switch (action) {
+      case "check_geoblock": {
+        try {
+          const res = await fetch("https://polymarket.com/api/geoblock");
+          const data = await res.json();
+          return new Response(
+            JSON.stringify({ ok: true, geoblock: data, httpStatus: res.status }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        } catch (e) {
+          return new Response(
+            JSON.stringify({ ok: false, error: getErrorMessage(e) }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+
       case "get_markets": {
         const markets = await getMarkets(params.limit || 5);
         return new Response(JSON.stringify({ markets }), {
@@ -412,7 +459,7 @@ serve(async (req) => {
           }
           stats.totalValue = parseFloat(ordersValue.toFixed(2));
         } catch (e) {
-          console.error("Error fetching orders:", e.message);
+          console.error("Error fetching orders:", getErrorMessage(e));
         }
 
         try {
@@ -450,10 +497,16 @@ serve(async (req) => {
 
       case "cancel_all": {
         const client = await getTradingClient();
-        const result = await client.cancelAll();
-        return new Response(JSON.stringify({ ok: true, result }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        try {
+          const result = await client.cancelAll();
+          return new Response(JSON.stringify({ ok: true, result }), {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        } catch (e) {
+          return new Response(JSON.stringify({ ok: false, error: getErrorMessage(e) }), {
+            status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
       }
 
       case "get_pnl_history": {
@@ -480,7 +533,7 @@ serve(async (req) => {
       }
 
       case "run_cycle": {
-        // ═══ PRODUCTION MARKET-MAKING CYCLE v4 — Radical Scoring + Sponsor Fix ═══
+        // ═══ PRODUCTION MARKET-MAKING CYCLE v5 — TickSize + Geoblock + Error Normalization ═══
         const client = await getTradingClient();
         const sb = getSupabase();
         const logs: string[] = [];
@@ -512,7 +565,7 @@ serve(async (req) => {
               logs.push(`💰 Баланс USDC внутри Polymarket: ${typeof balanceInfo === 'object' ? JSON.stringify(balanceInfo) : balanceInfo}`);
             }
           } catch (e) {
-            logs.push(`⚠️ Не удалось получить баланс: ${e.message}`);
+            logs.push(`⚠️ Не удалось получить баланс: ${getErrorMessage(e)}`);
           }
         }
 
@@ -553,26 +606,25 @@ serve(async (req) => {
           );
         }
 
-        // ── 1. Fetch top 150 active markets from Gamma API ──
+        // ── 1. Fetch top 90 active markets from Gamma API ──
         logs.push(`📊 Загрузка рынков (мин.объём: $${minVolume24h}, мин.глубина: $${minLiquidityDepth}, aggressive: ${aggressiveShortTerm ? "ON" : "OFF"})...`);
         let allMarkets: any[];
         try {
           allMarkets = await getMarkets(90);
         } catch (e) {
-          logs.push(`❌ Ошибка загрузки рынков: ${e.message}`);
+          logs.push(`❌ Ошибка загрузки рынков: ${getErrorMessage(e)}`);
           return new Response(
             JSON.stringify({ ok: true, logs, ordersPlaced: 0 }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
 
-        // ── 2. Pre-filter by 24h volume BEFORE enrichment (saves API calls) ──
+        // ── 2. Pre-filter by 24h volume BEFORE enrichment ──
         const volumeFiltered = allMarkets.filter(m => {
           const vol = parseFloat(m.volume24hr || m.volume || "0");
           return vol >= minVolume24h;
         });
 
-        // Limit enrichment to avoid timeout
         const marketsToEnrich = volumeFiltered.slice(0, Math.min(maxMarkets * 3, 50));
 
         // ── 3. Enrich with orderbook depth + sponsor data ──
@@ -594,7 +646,6 @@ serve(async (req) => {
           let sponsorPool = gammaReward;
           let sponsorMethod = gammaReward > 0 ? "gamma" : "none";
 
-          // Multi-method sponsor enrichment (with title fallback)
           if (sponsorPool === 0 && conditionId) {
             const question = m.question || m.title || "";
             const result = await getSponsorPool(conditionId, tokenId, question);
@@ -611,32 +662,26 @@ serve(async (req) => {
           }
 
           const midResult = await getMidPrice(client, tokenId);
-          const { mid, source, range1h, bidDepth, askDepth, bestBid, bestAsk } = midResult;
+          const { mid, source, range1h, bidDepth, askDepth, bestBid, bestAsk, tickSize } = midResult;
           const liquidityDepth = bidDepth + askDepth;
           const volume24h = parseFloat(m.volume24hr || m.volume || "0");
           const question = m.question || m.title || "";
 
-          // ── SOFT FILTERS ──
-
-          // Hard-skip: completely empty orderbook
           if (mid === 0 || source === "empty") {
             skipReasons.emptyBook++;
             continue;
           }
 
-          // Hard-skip: depth below absolute minimum (80)
           if (liquidityDepth < 80) {
             skipReasons.lowDepth++;
             continue;
           }
 
-          // Filter: sponsor pool minimum (user-configurable)
           if (sponsorPool < minSponsorPool) {
             skipReasons.lowSponsor++;
             continue;
           }
 
-          // Soft penalties (affect score, don't skip)
           const isCoinFlip = Math.abs(mid - 0.5) < 0.005;
           const coinFlipPenalty = isCoinFlip ? -2000 : 0;
 
@@ -645,7 +690,6 @@ serve(async (req) => {
 
           const depthPenalty = liquidityDepth < minLiquidityDepth ? -1500 : 0;
 
-          // ── Category bonus (v6 ultimate) ──
           const { bonus: categoryBonus, category, isTier1 } = getCategoryBonus(question, sponsorPool, aggressiveShortTerm);
 
           const score = scoreMarket(volume24h, sponsorPool, liquidityDepth, categoryBonus + coinFlipPenalty + wideSpreadPenalty + depthPenalty, isTier1);
@@ -665,6 +709,7 @@ serve(async (req) => {
             askDepth,
             bestBid,
             bestAsk,
+            tickSize,
             score,
             category,
             categoryBonus,
@@ -684,7 +729,6 @@ serve(async (req) => {
         const totalSponsor = selectedMarkets.reduce((s, m) => s + m.sponsorPool, 0);
         const avgSponsor = selectedMarkets.length > 0 ? totalSponsor / selectedMarkets.length : 0;
 
-        // Enhanced cycle-start logging
         logs.push(`🔍 Загружено ${allMarkets.length} | После фильтров ${enriched.length} | Выбрано ${selectedMarkets.length} (${sponsoredCount} со спонсорами, ${cryptoCount} short-term/crypto, ${macroCount} macro)`);
         const topTierCount = selectedMarkets.filter(m => m.category === "top-tier").length;
         const tier1InTop10 = selectedMarkets.slice(0, 10).filter(m => m.category === "top-tier").length;
@@ -692,7 +736,6 @@ serve(async (req) => {
         logs.push(`🎯 Выбрано ${selectedMarkets.length} (${sponsoredCount} sponsored/daily, ${cryptoCount + topTierCount} short-term/crypto, ${macroCount + sportsCount} macro) — Tier 1 markets in top 10: ${tier1InTop10}!`);
         logs.push(`🔍 Отфильтровано: vol<${minVolume24h}=${skipReasons.lowVol}, пустой стакан=${skipReasons.emptyBook}, глубина<80=${skipReasons.lowDepth}, спонсор<${minSponsorPool}=${skipReasons.lowSponsor}`);
 
-        // Log top markets
         for (const m of selectedMarkets.slice(0, 10)) {
           const name = (m.question || "Unknown").slice(0, 45);
           const catTag = m.category !== "other" ? ` [${m.category}]` : "";
@@ -710,7 +753,7 @@ serve(async (req) => {
             existingOrders = await client.getOpenOrders() || [];
             logs.push(`📋 Текущие ордера: ${existingOrders.length}`);
           } catch (e) {
-            logs.push(`⚠️ Не удалось получить ордера: ${e.message}`);
+            logs.push(`⚠️ Не удалось получить ордера: ${getErrorMessage(e)}`);
           }
         }
 
@@ -720,6 +763,8 @@ serve(async (req) => {
           const negRisk = market.negRisk ?? false;
           const marketId = market.conditionId || market.id || tokenId;
           const marketName = (market.question || "Unknown").slice(0, 50);
+          const tickSize = market.tickSize || 0.01;
+          const tickSizeStr = String(tickSize);
 
           let midPrice = market.mid;
           const priceSource = market.midSource;
@@ -736,7 +781,7 @@ serve(async (req) => {
           // Dynamic spread
           let { finalBp: dynamicBp, sponsorAdj, volAdj } = calcDynamicSpread(baseBp, market.sponsorPool || 0, range1h);
 
-          // ── NEAR-CERTAIN MARKET HANDLING (mid >0.92 or <0.08) ──
+          // ── NEAR-CERTAIN MARKET HANDLING ──
           let nearCertainLabel = "";
           let onlyBuy = false;
           let onlySell = false;
@@ -755,13 +800,13 @@ serve(async (req) => {
 
           // Calculate base prices
           const spreadDecimal = dynamicBp / 10000;
-          const buyPrice = midPrice - spreadDecimal;
-          const sellPrice = midPrice + spreadDecimal;
+          const rawBuyPrice = midPrice - spreadDecimal;
+          const rawSellPrice = midPrice + spreadDecimal;
 
           // Apply skew
-          const skew = applySkew(buyPrice, sellPrice, orderSize, netPos, maxPosition, dynamicBp);
+          const skew = applySkew(rawBuyPrice, rawSellPrice, orderSize, netPos, maxPosition, dynamicBp);
 
-          // Near-certain override: only place on heavy side
+          // Near-certain override
           if (onlyBuy) { skew.pauseSell = true; }
           if (onlySell) { skew.pauseBuy = true; }
 
@@ -775,9 +820,8 @@ serve(async (req) => {
             if (nearCertainLabel) spreadDetail += ` near-certain cap`;
             spreadDetail += `)`;
           }
-          logs.push(`📈 ${marketName}${nearCertainLabel}: mid=${midPrice.toFixed(4)} (${priceSource}) spread=${spreadDetail}${sponsorLabel}`);
+          logs.push(`📈 ${marketName}${nearCertainLabel}: mid=${midPrice.toFixed(4)} (${priceSource}) spread=${spreadDetail} tick=${tickSizeStr}${sponsorLabel}`);
 
-          // Skew log
           if (skew.skewLabel !== "none") {
             logs.push(`  ⚖️ SKEW: pos=${netPos.toFixed(1)} → ${skew.skewLabel}`);
           } else if (Math.abs(netPos) > 0.01) {
@@ -823,11 +867,19 @@ serve(async (req) => {
               logs.push(`  ⏸️ SELL paused${nearCertainLabel ? " (near-certain)" : " (max pos)"}`);
             }
           } else {
-            // ── LIVE mode: Selective Order Update ──
-            let safeBuyPrice = Math.max(0.01, Math.min(0.99, Math.round(skew.buyPrice * 10000) / 10000));
-            let safeSellPrice = Math.max(0.01, Math.min(0.99, Math.round(skew.sellPrice * 10000) / 10000));
-            if (safeBuyPrice === 1 || safeBuyPrice === 0) safeBuyPrice = 0.99;
-            if (safeSellPrice === 1 || safeSellPrice === 0) safeSellPrice = 0.01;
+            // ── LIVE mode: Selective Order Update with tick-aligned prices ──
+            let safeBuyPrice = floorToTick(Math.max(0.01, Math.min(0.99, skew.buyPrice)), tickSize);
+            let safeSellPrice = ceilToTick(Math.max(0.01, Math.min(0.99, skew.sellPrice)), tickSize);
+
+            // Clamp to valid range after tick rounding
+            safeBuyPrice = Math.max(0.01, Math.min(0.99, safeBuyPrice));
+            safeSellPrice = Math.max(0.01, Math.min(0.99, safeSellPrice));
+
+            // Validate buy < sell; skip market if not
+            if (safeBuyPrice >= safeSellPrice) {
+              logs.push(`  ⏭️ [SKIP] ${marketName}: buyPrice=${safeBuyPrice.toFixed(4)} >= sellPrice=${safeSellPrice.toFixed(4)} after tick alignment (tick=${tickSizeStr})`);
+              continue;
+            }
 
             const myBuys = existingOrders.filter(
               (o: any) => o.asset_id === tokenId && (o.side === "BUY" || o.side === "buy")
@@ -848,23 +900,26 @@ serve(async (req) => {
                     logs.push(`  🗑️ Cancel BUY @ ${parseFloat(existingBuy.price).toFixed(4)}`);
                     await logTrade(sb, { market_name: marketName, market_id: marketId, action: "cancel", side: "BUY", price: parseFloat(existingBuy.price), size: parseFloat(existingBuy.original_size || existingBuy.size || "0"), paper: false });
                   } catch (e) {
-                    logs.push(`  ⚠️ Cancel BUY err: ${e.message}`);
+                    logs.push(`  ⚠️ Cancel BUY err: ${getErrorMessage(e)}`);
                   }
                 }
                 try {
-                  console.log(`🚀 Отправляем реальный BUY ордер: token=${tokenId}, price=${safeBuyPrice}, size=${skew.buySize}`);
+                  const t0 = Date.now();
+                  console.log(`🚀 Отправляем реальный BUY ордер: token=${tokenId}, price=${safeBuyPrice}, size=${skew.buySize}, tick=${tickSizeStr}`);
                   const buyOrder = await client.createAndPostOrder(
                     { tokenID: tokenId, price: safeBuyPrice, size: skew.buySize, side: "BUY" },
-                    { tickSize: "0.01", negRisk },
+                    { tickSize: tickSizeStr, negRisk },
                     "GTC"
                   );
-                  console.log("✅ BUY ордер принят Polymarket:", JSON.stringify(buyOrder));
-                  logs.push(`  ✅ BUY @ ${safeBuyPrice.toFixed(4)} (${skew.buySize} USDC)`);
+                  const latency = Date.now() - t0;
+                  console.log(`✅ BUY ордер принят Polymarket (${latency}ms):`, JSON.stringify(buyOrder));
+                  logs.push(`  ✅ BUY @ ${safeBuyPrice.toFixed(4)} (${skew.buySize} USDC) latency=${latency}ms`);
                   orders.push(buyOrder);
                   await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "BUY", price: safeBuyPrice, size: skew.buySize, paper: false });
                 } catch (e) {
-                  console.error("❌ BUY ордер отклонён:", e.message);
-                  logs.push(`  ❌ BUY failed: ${e.message}`);
+                  const errMsg = getErrorMessage(e);
+                  console.error(`❌ BUY ордер отклонён: ${errMsg}`);
+                  logs.push(`  ❌ BUY failed: ${errMsg}`);
                 }
               }
               for (const extra of myBuys.slice(1)) {
@@ -889,23 +944,26 @@ serve(async (req) => {
                     logs.push(`  🗑️ Cancel SELL @ ${parseFloat(existingSell.price).toFixed(4)}`);
                     await logTrade(sb, { market_name: marketName, market_id: marketId, action: "cancel", side: "SELL", price: parseFloat(existingSell.price), size: parseFloat(existingSell.original_size || existingSell.size || "0"), paper: false });
                   } catch (e) {
-                    logs.push(`  ⚠️ Cancel SELL err: ${e.message}`);
+                    logs.push(`  ⚠️ Cancel SELL err: ${getErrorMessage(e)}`);
                   }
                 }
                 try {
-                  console.log(`🚀 Отправляем реальный SELL ордер: token=${tokenId}, price=${safeSellPrice}, size=${skew.sellSize}`);
+                  const t0 = Date.now();
+                  console.log(`🚀 Отправляем реальный SELL ордер: token=${tokenId}, price=${safeSellPrice}, size=${skew.sellSize}, tick=${tickSizeStr}`);
                   const sellOrder = await client.createAndPostOrder(
                     { tokenID: tokenId, price: safeSellPrice, size: skew.sellSize, side: "SELL" },
-                    { tickSize: "0.01", negRisk },
+                    { tickSize: tickSizeStr, negRisk },
                     "GTC"
                   );
-                  console.log("✅ SELL ордер принят Polymarket:", JSON.stringify(sellOrder));
-                  logs.push(`  ✅ SELL @ ${safeSellPrice.toFixed(4)} (${skew.sellSize} USDC)`);
+                  const latency = Date.now() - t0;
+                  console.log(`✅ SELL ордер принят Polymarket (${latency}ms):`, JSON.stringify(sellOrder));
+                  logs.push(`  ✅ SELL @ ${safeSellPrice.toFixed(4)} (${skew.sellSize} USDC) latency=${latency}ms`);
                   orders.push(sellOrder);
                   await logTrade(sb, { market_name: marketName, market_id: marketId, action: "place", side: "SELL", price: safeSellPrice, size: skew.sellSize, paper: false });
                 } catch (e) {
-                  console.error("❌ SELL ордер отклонён:", e.message);
-                  logs.push(`  ❌ SELL failed: ${e.message}`);
+                  const errMsg = getErrorMessage(e);
+                  console.error(`❌ SELL ордер отклонён: ${errMsg}`);
+                  logs.push(`  ❌ SELL failed: ${errMsg}`);
                 }
               }
               for (const extra of mySells.slice(1)) {
@@ -941,9 +999,10 @@ serve(async (req) => {
         );
     }
   } catch (error) {
-    console.error("Edge function error:", error);
+    const errMsg = getErrorMessage(error);
+    console.error("Edge function error:", errMsg);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: errMsg }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
