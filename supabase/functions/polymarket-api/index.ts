@@ -46,6 +46,34 @@ function getFunder(): string | undefined {
   return Deno.env.get("POLYMARKET_FUNDER") || undefined;
 }
 
+function getRuntimeIdentity() {
+  const privateKey = Deno.env.get("POLYMARKET_PRIVATE_KEY");
+  if (!privateKey) throw new Error("POLYMARKET_PRIVATE_KEY not set");
+  const signer = new Wallet(privateKey);
+  const signatureType = getSignatureType();
+  const funder = getFunder();
+  const expectedPortfolioAddress = signatureType === 0 ? signer.address : (funder || null);
+  const apiKey = cachedCreds?.apiKey || cachedCreds?.key || null;
+  return {
+    signerAddress: signer.address,
+    signatureType,
+    funder: funder || null,
+    expectedPortfolioAddress,
+    apiKeyPrefix: apiKey ? String(apiKey).slice(0, 12) + "..." : null,
+  };
+}
+
+function compactOrder(order: any) {
+  return {
+    id: order?.id || null,
+    asset_id: order?.asset_id || order?.token_id || null,
+    side: order?.side || null,
+    price: order?.price || null,
+    size: order?.original_size || order?.size || null,
+    status: order?.status || null,
+  };
+}
+
 async function getTradingClient() {
   const privateKey = Deno.env.get("POLYMARKET_PRIVATE_KEY");
   if (!privateKey) throw new Error("POLYMARKET_PRIVATE_KEY not set");
@@ -435,6 +463,44 @@ serve(async (req) => {
         const apiKey = cachedCreds?.apiKey || cachedCreds?.key || "unknown";
         return new Response(
           JSON.stringify({ ok: true, address: String(apiKey).slice(0, 12) + "..." }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      case "whoami": {
+        const client = await getTradingClient();
+        const sb = getSupabase();
+        const identity = getRuntimeIdentity();
+        const diagnostics: Record<string, unknown> = {
+          version: CLIENT_VERSION,
+          serverTime: new Date().toISOString(),
+          identity,
+          geoblock: null,
+          clob: { openOrdersCount: 0, openOrdersSample: [] },
+          db: { recentLiveActions: [] },
+        };
+        try {
+          const res = await fetch("https://polymarket.com/api/geoblock");
+          diagnostics.geoblock = { status: res.status, ...(await res.json()) };
+        } catch (e) { diagnostics.geoblock = { error: getErrorMessage(e) }; }
+        try {
+          const openOrders = await client.getOpenOrders();
+          diagnostics.clob = {
+            openOrdersCount: openOrders?.length || 0,
+            openOrdersSample: (openOrders || []).slice(0, 20).map(compactOrder),
+          };
+        } catch (e) { diagnostics.clob = { error: getErrorMessage(e) }; }
+        try {
+          const { data: liveActions } = await sb
+            .from("bot_trade_log")
+            .select("timestamp,market_name,market_id,action,side,price,size,paper")
+            .eq("paper", false)
+            .order("timestamp", { ascending: false })
+            .limit(30);
+          diagnostics.db = { recentLiveActions: liveActions || [] };
+        } catch (e) { diagnostics.db = { error: getErrorMessage(e) }; }
+        return new Response(
+          JSON.stringify({ ok: true, diagnostics }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
