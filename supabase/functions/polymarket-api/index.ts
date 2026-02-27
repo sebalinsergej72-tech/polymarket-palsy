@@ -317,7 +317,8 @@ function calcDynamicSpread(baseBp: number, sponsorPool: number, range1h: number)
 
 function applySkew(
   buyPrice: number, sellPrice: number, orderSize: number,
-  netPos: number, maxPos: number, baseBp: number
+  netPos: number, maxPos: number, baseBp: number,
+  minPrice: number, maxPrice: number
 ): { buyPrice: number; sellPrice: number; buySize: number; sellSize: number; pauseBuy: boolean; pauseSell: boolean; skewLabel: string } {
   const spreadDecimal = baseBp / 10000;
   let buySize = orderSize;
@@ -343,8 +344,8 @@ function applySkew(
   if (netPos > maxPos) { pauseBuy = true; skewLabel = `PAUSED BUY (pos=${netPos.toFixed(0)}>${maxPos})`; }
   if (netPos < -maxPos) { pauseSell = true; skewLabel = `PAUSED SELL (pos=${netPos.toFixed(0)}<-${maxPos})`; }
 
-  buyPrice = Math.max(0.01, buyPrice);
-  sellPrice = Math.min(0.99, sellPrice);
+  buyPrice = Math.max(minPrice, Math.min(maxPrice, buyPrice));
+  sellPrice = Math.max(minPrice, Math.min(maxPrice, sellPrice));
 
   return { buyPrice, sellPrice, buySize, sellSize, pauseBuy, pauseSell, skewLabel };
 }
@@ -765,6 +766,8 @@ serve(async (req) => {
           const marketName = (market.question || "Unknown").slice(0, 50);
           const tickSize = market.tickSize || 0.01;
           const tickSizeStr = String(tickSize);
+          const minPrice = tickSize;
+          const maxPrice = Math.max(minPrice, 1 - tickSize);
 
           let midPrice = market.mid;
           const priceSource = market.midSource;
@@ -804,7 +807,7 @@ serve(async (req) => {
           const rawSellPrice = midPrice + spreadDecimal;
 
           // Apply skew
-          const skew = applySkew(rawBuyPrice, rawSellPrice, orderSize, netPos, maxPosition, dynamicBp);
+          const skew = applySkew(rawBuyPrice, rawSellPrice, orderSize, netPos, maxPosition, dynamicBp, minPrice, maxPrice);
 
           // Near-certain override
           if (onlyBuy) { skew.pauseSell = true; }
@@ -869,8 +872,6 @@ serve(async (req) => {
           } else {
             // ── LIVE mode: Selective Order Update with tick-aligned prices ──
             const decimals = (tickSizeStr.split(".")[1] || "").length;
-            const minPrice = tickSize;
-            const maxPrice = 1 - tickSize;
 
             let safeBuyPrice = floorToTick(Math.max(minPrice, Math.min(maxPrice, skew.buyPrice)), tickSize);
             let safeSellPrice = ceilToTick(Math.max(minPrice, Math.min(maxPrice, skew.sellPrice)), tickSize);
@@ -879,7 +880,7 @@ serve(async (req) => {
             safeSellPrice = Number(safeSellPrice.toFixed(decimals));
 
             // Validate buy < sell; skip market if not
-            if (safeBuyPrice >= safeSellPrice) {
+            if (!skew.pauseBuy && !skew.pauseSell && safeBuyPrice >= safeSellPrice) {
               logs.push(`  ⏭️ [SKIP] ${marketName}: invalid grid after tick align buy=${safeBuyPrice} sell=${safeSellPrice} tick=${tickSizeStr}`);
               continue;
             }
