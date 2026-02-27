@@ -49,6 +49,8 @@ export function useBotState() {
   const [sponsorStats, setSponsorStats] = useState({ sponsored: 0, total: 0, avgSponsor: 0 });
   const logIdRef = useRef(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cycleInFlightRef = useRef(false);
+  const lastOverlapLogAtRef = useRef(0);
 
   const addLog = useCallback((level: LogEntry["level"], message: string) => {
     const entry: LogEntry = {
@@ -86,6 +88,16 @@ export function useBotState() {
   }, [addLog, callApi]);
 
   const runCycle = useCallback(async () => {
+    if (cycleInFlightRef.current) {
+      const now = Date.now();
+      if (now - lastOverlapLogAtRef.current > 15000) {
+        addLog("warn", "⏭️ Пропуск цикла: предыдущий цикл ещё выполняется");
+        lastOverlapLogAtRef.current = now;
+      }
+      return;
+    }
+
+    cycleInFlightRef.current = true;
     addLog("info", "━━━ Новый цикл ━━━");
     try {
       const data = await callApi("run_cycle", {
@@ -135,6 +147,8 @@ export function useBotState() {
       }
     } catch (e: any) {
       addLog("error", `❌ Ошибка цикла: ${e.message}`);
+    } finally {
+      cycleInFlightRef.current = false;
     }
   }, [addLog, callApi, config]);
 
