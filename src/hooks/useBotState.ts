@@ -38,13 +38,25 @@ const DEFAULT_CONFIG: BotConfig = {
   aggressiveShortTerm: true,
 };
 
+const STORAGE_KEY_CONFIG = "polybot_config";
+const STORAGE_KEY_RUNNING = "polybot_was_running";
+
+function loadConfig(): BotConfig {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_CONFIG);
+    if (raw) return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+  } catch { /* ignore */ }
+  return DEFAULT_CONFIG;
+}
+
 const MAX_LOGS = 200;
 
 export function useBotState() {
   const [isRunning, setIsRunning] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<BotConfig>(loadConfig);
+  const autoStartedRef = useRef(false);
   const [circuitBreaker, setCircuitBreaker] = useState(false);
   const [sponsorStats, setSponsorStats] = useState({ sponsored: 0, total: 0, avgSponsor: 0 });
   const logIdRef = useRef(0);
@@ -186,10 +198,6 @@ export function useBotState() {
 
   const clearLogs = useCallback(() => setLogs([]), []);
 
-  const updateConfig = useCallback((partial: Partial<BotConfig>) => {
-    setConfig((prev) => ({ ...prev, ...partial }));
-  }, []);
-
   const resetPositions = useCallback(async () => {
     addLog("info", "🗑️ Сброс всех позиций...");
     try {
@@ -199,6 +207,31 @@ export function useBotState() {
       addLog("error", `❌ Ошибка сброса: ${e.message}`);
     }
   }, [addLog, callApi]);
+
+  const updateConfig = useCallback((partial: Partial<BotConfig>) => {
+    setConfig((prev) => {
+      const next = { ...prev, ...partial };
+      try { localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(next)); } catch { /* */ }
+      return next;
+    });
+  }, []);
+
+  // Persist running state
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_RUNNING, JSON.stringify(isRunning)); } catch { /* */ }
+  }, [isRunning]);
+
+  // Auto-start on reload if was running
+  useEffect(() => {
+    if (autoStartedRef.current) return;
+    try {
+      const wasRunning = localStorage.getItem(STORAGE_KEY_RUNNING);
+      if (wasRunning === "true") {
+        autoStartedRef.current = true;
+        startBot();
+      }
+    } catch { /* */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     return () => {
