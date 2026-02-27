@@ -35,11 +35,11 @@ function getSupabase() {
 // ─── Trading Client (env-driven signatureType & funder) ───
 function getSignatureType(): number {
   const raw = Deno.env.get("POLYMARKET_SIGNATURE_TYPE");
-  if (raw) {
-    const parsed = parseInt(raw, 10);
-    if (!isNaN(parsed)) return parsed;
-  }
-  return 1; // default EOA
+  if (!raw) return 0;
+  const parsed = parseInt(raw, 10);
+  if ([0, 1, 2].includes(parsed)) return parsed;
+  console.warn(`Invalid POLYMARKET_SIGNATURE_TYPE="${raw}", fallback to 0 (EOA)`);
+  return 0;
 }
 
 function getFunder(): string | undefined {
@@ -868,16 +868,19 @@ serve(async (req) => {
             }
           } else {
             // ── LIVE mode: Selective Order Update with tick-aligned prices ──
-            let safeBuyPrice = floorToTick(Math.max(0.01, Math.min(0.99, skew.buyPrice)), tickSize);
-            let safeSellPrice = ceilToTick(Math.max(0.01, Math.min(0.99, skew.sellPrice)), tickSize);
+            const decimals = (tickSizeStr.split(".")[1] || "").length;
+            const minPrice = tickSize;
+            const maxPrice = 1 - tickSize;
 
-            // Clamp to valid range after tick rounding
-            safeBuyPrice = Math.max(0.01, Math.min(0.99, safeBuyPrice));
-            safeSellPrice = Math.max(0.01, Math.min(0.99, safeSellPrice));
+            let safeBuyPrice = floorToTick(Math.max(minPrice, Math.min(maxPrice, skew.buyPrice)), tickSize);
+            let safeSellPrice = ceilToTick(Math.max(minPrice, Math.min(maxPrice, skew.sellPrice)), tickSize);
+
+            safeBuyPrice = Number(safeBuyPrice.toFixed(decimals));
+            safeSellPrice = Number(safeSellPrice.toFixed(decimals));
 
             // Validate buy < sell; skip market if not
             if (safeBuyPrice >= safeSellPrice) {
-              logs.push(`  ⏭️ [SKIP] ${marketName}: buyPrice=${safeBuyPrice.toFixed(4)} >= sellPrice=${safeSellPrice.toFixed(4)} after tick alignment (tick=${tickSizeStr})`);
+              logs.push(`  ⏭️ [SKIP] ${marketName}: invalid grid after tick align buy=${safeBuyPrice} sell=${safeSellPrice} tick=${tickSizeStr}`);
               continue;
             }
 
